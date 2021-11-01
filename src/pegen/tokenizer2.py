@@ -1,6 +1,4 @@
-import token
-import tokenize
-
+from pypy.interpreter.pyparser.pygram import tokens
 from pypy.interpreter.pyparser.pytoken import python_opmap as exact_token_types
 
 Mark = int
@@ -39,14 +37,14 @@ class Tokenizer:
         """Return the next token *without* updating the index."""
         while self._index == len(self._tokens):
             tok = next(self._tokengen)
-            if tok.token_type in (tokenize.NL, tokenize.COMMENT):
+            if tok.token_type in (tokens.NL, tokens.COMMENT):
                 continue
-            if tok.token_type == token.ERRORTOKEN and tok.value.isspace():
+            if tok.token_type == tokens.ERRORTOKEN and tok.value.isspace():
                 continue
             if (
-                tok.token_type == token.NEWLINE
+                tok.token_type == tokens.NEWLINE
                 and self._tokens
-                and self._tokens[-1].token_type == token.NEWLINE
+                and self._tokens[-1].token_type == tokens.NEWLINE
             ):
                 continue
             self._tokens.append(tok)
@@ -61,8 +59,8 @@ class Tokenizer:
 
     def get_last_non_whitespace_token(self):
         for tok in reversed(self._tokens[: self._index]):
-            if tok.token_type != tokenize.ENDMARKER and (
-                tok.token_type < tokenize.NEWLINE or tok.token_type > tokenize.DEDENT
+            if tok.token_type != tokens.ENDMARKER and (
+                tok.token_type < tokens.NEWLINE or tok.token_type > tokens.DEDENT
             ):
                 break
         return tok
