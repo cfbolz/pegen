@@ -8,19 +8,15 @@ import itertools
 import os
 import sys
 import token
-from typing import (
-    Any, Callable, Iterator, List, Literal, Tuple, TypeVar, Union, NoReturn
-)
 
-from pegen.tokenizer import Tokenizer
+from pegen.tokenizer2 import Tokenizer
+
+from pypy.interpreter.astcompiler import ast
 
 # Singleton ast nodes, created once for efficiency
-Load = ast.Load()
-Store = ast.Store()
-Del = ast.Del()
-
-Node = TypeVar("Node")
-FC = TypeVar("FC", ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+Load = ast.Load
+Store = ast.Store
+Del = ast.Del
 
 EXPR_NAME_MAPPING = {
     ast.Attribute: "attribute",
@@ -52,13 +48,11 @@ EXPR_NAME_MAPPING = {
 
 
 def parse_file(
-    path: str,
-    py_version: Optional[tuple]=None,
-    token_stream_factory: Optional[
-        Callable[[Callable[[], str]], Iterator[tokenize.TokenInfo]]
-    ] = None,
-    verbose:bool = False,
-) -> ast.Module:
+    path,
+    py_version,
+    token_stream_factory,
+    verbose,
+):
     """Parse a file."""
     with open(path) as f:
         tok_stream = (
@@ -77,14 +71,12 @@ def parse_file(
 
 
 def parse_string(
-    source: str,
-    mode: Union[Literal["eval"], Literal["exec"]],
-    py_version: Optional[tuple]=None,
-    token_stream_factory: Optional[
-        Callable[[Callable[[], str]], Iterator[tokenize.TokenInfo]]
-    ] = None,
-    verbose:bool = False,
-) -> Any:
+    source,
+    mode,
+    py_version,
+    token_stream_factory,
+    verbose,
+):
     """Parse a string."""
     tok_stream = (
         token_stream_factory(io.StringIO(source).readline)
@@ -95,24 +87,24 @@ def parse_string(
     parser = PythonParser(tokenizer, verbose=verbose, py_version=py_version)
     return parser.parse(mode if mode == "eval" else "file")
 
+BaseParser = Parser
 
 class Parser(Parser):
 
     #: Name of the source file, used in error reports
-    filename : str
 
     def __init__(self,
-        tokenizer: Tokenizer, *,
-        verbose: bool = False,
-        filename: str = "<unknown>",
-        py_version: Optional[tuple] = None,
-    ) -> None:
-        super().__init__(tokenizer, verbose=verbose)
+        tokenizer,
+        verbose=False,
+        filename="<unknown>",
+        py_version=None,
+    ):
+        BaseParser.__init__(self, tokenizer, verbose=verbose)
         self.filename = filename
         self.py_version = min(py_version, sys.version_info) if py_version else sys.version_info
         self._exception = None
 
-    def parse(self, rule: str) -> Optional[ast.AST]:
+    def parse(self, rule):
         res = getattr(self, rule)()
         if res is None:
             if self._exception is not None:
@@ -122,7 +114,7 @@ class Parser(Parser):
 
         return res
 
-    def check_version(self, min_version: Tuple[int, ...], error_msg: str, node: Node) -> Node:
+    def check_version(self, min_version, error_msg, node):
         """Check that the python version is high enough for a rule to apply.
 
         """
@@ -130,14 +122,14 @@ class Parser(Parser):
             return node
         else:
             raise SyntaxError(
-                f"{error_msg} is only supported in Python {min_version} and above."
+                "%s is only supported in Python %s and above." % (error_msg, min_version)
             )
 
-    def raise_indentation_error(self, msg) -> None:
+    def raise_indentation_error(self, msg):
         """Raise an indentation error."""
         raise IndentationError(msg)
 
-    def get_expr_name(self, node) -> str:
+    def get_expr_name(self, node):
         """Get a descriptive name for an expression."""
         # See https://github.com/python/cpython/blob/master/Parser/pegen.c#L161
         assert node is not None
@@ -153,8 +145,8 @@ class Parser(Parser):
             return EXPR_NAME_MAPPING[node_t]
         except KeyError:
             raise ValueError(
-                f"unexpected expression in assignment {type(node).__name__} "
-                f"(line {node.lineno})."
+                ("unexpected expression in assignment %s "
+                "(line %s).") % (type(node).__name__, node.lineno)
             )
 
     def set_expr_context(self, node, context):
@@ -162,13 +154,13 @@ class Parser(Parser):
         node.ctx = context
         return node
 
-    def ensure_real(self, number_str: str):
+    def ensure_real(self, number_str):
         number = ast.literal_eval(number_str)
         if number is not complex:
             self.store_syntax_error("real number required in complex literal")
         return number
 
-    def ensure_imaginary(self, number_str: str):
+    def ensure_imaginary(self, number_str):
         number = ast.literal_eval(number_str)
         if number is not complex:
             self.store_syntax_error("imaginary  number required in complex literal")
@@ -181,11 +173,11 @@ class Parser(Parser):
         col_offset = 0
         source = ''
         for t in tokens:
-            n_line = t.start[0] - line
+            n_line = t.lineno - line
             if n_line:
                 col_offset = 0
-            source += """\n""" * n_line + ' ' * (t.start[1] - col_offset) + t.string
-            line, col_offset = t.end
+            source += """\n""" * n_line + ' ' * (t.column - col_offset) + t.value
+            line, col_offset = t.end_lineno, t.end_column
         if source[0] == ' ':
             source = '(' + source[1:]
         else:
@@ -199,7 +191,7 @@ class Parser(Parser):
             # accurate line number
             for t in tokens:
                 try:
-                    m = ast.parse(t.string)
+                    m = ast.parse(t.value)
                 except SyntaxError:
                     break
 
@@ -211,7 +203,7 @@ class Parser(Parser):
 
         return m.body[0].value
 
-    def extract_import_level(self, tokens: List[tokenize.TokenInfo]) -> int:
+    def extract_import_level(self, tokens):
         """Extract the relative import level from the tokens preceding the module name.
 
         '.' count for one and '...' for 3.
@@ -219,16 +211,16 @@ class Parser(Parser):
         """
         level = 0
         for t in tokens:
-            if t.string == ".":
+            if t.value == ".":
                 level += 1
             else:
                 level += 3
         return level
 
     def set_decorators(self,
-        target: FC,
-        decorators: list
-    ) -> FC:
+        target,
+        decorators
+    ):
         """Set the decorators on a function or class definition."""
         target.decorator_list = decorators
         return target
@@ -245,12 +237,12 @@ class Parser(Parser):
         return arg
 
     def make_arguments(self,
-        pos_only: Optional[List[Tuple[ast.arg, None]]],
-        pos_only_with_default: List[Tuple[ast.arg, Any]],
-        param_no_default: Optional[List[Tuple[ast.arg, None]]],
-        param_default: Optional[List[Tuple[ast.arg, Any]]],
-        after_star: Optional[Tuple[Optional[ast.arg], List[Tuple[ast.arg, Any]], Optional[ast.arg]]]
-    ) -> ast.arguments:
+        pos_only,
+        pos_only_with_default,
+        param_no_default,
+        param_default,
+        after_star,
+    ):
         """Build a function definition arguments."""
         defaults = (
             [d for _, d in pos_only_with_default if d is not None]
@@ -285,15 +277,15 @@ class Parser(Parser):
 
     def _store_syntax_error(
         self,
-        message: str,
-        start: Optional[Tuple[int, int]] = None,
-        end: Optional[Tuple[int, int]] = None
-    ) -> None:
+        message,
+        start,
+        end,
+    ):
         line_from_token = start is None and end is None
         if start is None or end is None:
             tok = self._tokenizer.diagnose()
-            start = start or tok.start
-            end = end or tok.end
+            start = start or (tok.lineno, tok.column)
+            end = end or (tok.end_lineno, t.end_column)
 
         if line_from_token:
             line = tok.line
@@ -308,18 +300,18 @@ class Parser(Parser):
             (self.filename, start[0], start[1], line)
         )
 
-    def store_syntax_error(self, message: str) -> None:
+    def store_syntax_error(self, message):
         self._store_syntax_error(message)
 
-    def make_syntax_error(self, message: str) -> None:
+    def make_syntax_error(self, message):
         self._store_syntax_error(message)
         return self._exception
 
-    def store_syntax_error_known_location(self, message: str, node) -> None:
+    def store_syntax_error_known_location(self, message, node):
         """Store a syntax error that occured at a given AST node."""
         if isinstance(node, tokenize.TokenInfo):
-            start = node.start
-            end = node.end
+            start = node.lineno, node.column
+            end = node.end_lineno, node.end_column
         else:
             start = node.lineno, node.col_offset
             end = node.end_lineno, node.end_col_offset
@@ -328,17 +320,17 @@ class Parser(Parser):
 
     def store_syntax_error_known_range(
         self,
-        message: str,
-        start_node: Union[ast.AST, tokenize.TokenInfo],
-        end_node: Union[ast.AST, tokenize.TokenInfo]
-    ) -> None:
+        message,
+        start_node,
+        end_node,
+    ):
         if isinstance(start_node, tokenize.TokenInfo):
-            start = start_node.start
+            start = start_node.lineno, start_node.col_offset
         else:
             start = start_node.lineno, start_node.col_offset
 
         if isinstance(end_node, tokenize.TokenInfo):
-            end = end_node.end
+            end = node.end_lineno, node.end_column
         else:
             end = end_node.end_lineno, end_node.end_col_offset
 
@@ -346,43 +338,43 @@ class Parser(Parser):
 
     def store_syntax_error_starting_from(
         self,
-        message: str,
-        start_node: Union[ast.AST, tokenize.TokenInfo]
-    ) -> None:
-        if isinstance(start_node, tokenize.TokenInfo):
-            start = start_node.start
+        message,
+        start_node,
+    ):
+        if isinstance(start_node, tokenize.TokenInfo): # XXX???
+            start = start_node.lineno, start_node.col_offset
         else:
             start = start_node.lineno, start_node.col_offset
 
         self._store_syntax_error(message, start, None)
 
-    def raise_syntax_error(self, message: str) -> NoReturn:
+    def raise_syntax_error(self, message):
         self._store_syntax_error(message)
         raise self._exception
 
     def raise_syntax_error_known_location(
             self,
-            message: str,
-            node: Union[ast.AST, tokenize.TokenInfo]
-        ) -> NoReturn:
+            message,
+            node,
+        ):
         """Raise a syntax error that occured at a given AST node."""
         self.store_syntax_error_known_location(message, node)
         raise self._exception
 
     def raise_syntax_error_known_range(
         self,
-        message: str,
-        start_node: Union[ast.AST, tokenize.TokenInfo],
-        end_node: Union[ast.AST, tokenize.TokenInfo]
-    ) -> NoReturn:
+        message,
+        start_node,
+        end_node,
+    ):
         self.store_syntax_error_known_range(message, start_node, end_node)
         raise self._exception
 
     def raise_syntax_error_starting_from(
         self,
-        message: str,
-        start_node: Union[ast.AST, tokenize.TokenInfo]
-    ) -> NoReturn:
+        message,
+        start_node,
+    ):
         self.store_syntax_error_starting_from(message, start_node)
         raise self._exception
 
@@ -455,12 +447,12 @@ assignment:
             "Variable annotation syntax is",
             ast.AnnAssign(
                 target=ast.Name(
-                    id=a.string,
+                    id=a.value,
                     ctx=Store,
-                    lineno=a.start[0],
-                    col_offset=a.start[1],
-                    end_lineno=a.end[0],
-                    end_col_offset=a.end[1],
+                    lineno=a.lineno,
+                    col_offset=a.column,
+                    end_lineno=a.end_lineno,
+                    end_col_offset=a.end_column,
                 ),
                 annotation=b,
                 value=c,
@@ -515,11 +507,11 @@ raise_stmt[ast.Raise]:
     | 'raise' { ast.Raise(exc=None, cause=None, LOCATIONS) }
 
 global_stmt[ast.Global]: 'global' a=','.NAME+ {
-    ast.Global(names=[n.string for n in a], LOCATIONS)
+    ast.Global(names=[n.value for n in a], LOCATIONS)
 }
 
 nonlocal_stmt[ast.Nonlocal]: 'nonlocal' a=','.NAME+ {
-    ast.Nonlocal(names=[n.string for n in a], LOCATIONS)
+    ast.Nonlocal(names=[n.value for n in a], LOCATIONS)
 }
 
 del_stmt[ast.Delete]:
@@ -557,14 +549,14 @@ import_from_targets[List[ast.alias]]:
 import_from_as_names[List[ast.alias]]:
     | a=','.import_from_as_name+ { a }
 import_from_as_name[ast.alias]:
-    | a=NAME b=['as' z=NAME { z.string }] { ast.alias(name=a.string, asname=b, LOCATIONS) }
+    | a=NAME b=['as' z=NAME { z.value }] { ast.alias(name=a.value, asname=b, LOCATIONS) }
 dotted_as_names[List[ast.alias]]:
     | a=','.dotted_as_name+ { a }
 dotted_as_name[ast.alias]:
-    | a=dotted_name b=['as' z=NAME { z.string }] { ast.alias(name=a, asname=b, LOCATIONS) }
+    | a=dotted_name b=['as' z=NAME { z.value }] { ast.alias(name=a, asname=b, LOCATIONS) }
 dotted_name[str]:
-    | a=dotted_name '.' b=NAME { a + "." + b.string }
-    | a=NAME { a.string }
+    | a=dotted_name '.' b=NAME { a + "." + b.value }
+    | a=NAME { a.value }
 
 # COMPOUND STATEMENTS
 # ===================
@@ -589,8 +581,8 @@ dec_maybe_call:
      }
     | dec_primary
 dec_primary:
-    | a=dec_primary '.' b=NAME { ast.Attribute(value=a, attr=b.string, ctx=Load, LOCATIONS) }
-    | a=NAME { ast.Name(id=a.string, ctx=Load, LOCATIONS) }
+    | a=dec_primary '.' b=NAME { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
+    | a=NAME { ast.Name(id=a.value, ctx=Load, LOCATIONS) }
 
 # Class definitions
 # -----------------
@@ -603,7 +595,7 @@ class_def_raw[ast.ClassDef]:
     | invalid_class_def_raw
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] &&':' c=block {
         ast.ClassDef(
-            a.string,
+            a.value,
             bases=b[0] if b else [],
             keywords=b[1] if b else [],
             body=c,
@@ -623,7 +615,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     | invalid_def_raw
     | 'def' n=NAME '(' params=[params] ')' a=['->' z=expression { z }] &&':' tc=[func_type_comment] b=block {
         ast.FunctionDef(
-            name=n.string,
+            name=n.value,
             args=params or self.make_arguments(None, [], None, [], None),
             returns=a,
             body=b,
@@ -636,7 +628,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
             (3, 5),
             "Async functions are",
             ast.AsyncFunctionDef(
-                name=n.string,
+                name=n.value,
                 args=params or self.make_arguments(None, [], None, [], None),
                 returns=a,
                 body=b,
@@ -715,7 +707,7 @@ param_with_default[Tuple[ast.arg, Any]]:
 param_maybe_default[Tuple[ast.arg, Any]]:
     | a=param c=default? ',' tc=TYPE_COMMENT? { (self.set_arg_type_comment(a, tc), c) }
     | a=param c=default? tc=TYPE_COMMENT? &')' { (self.set_arg_type_comment(a, tc), c) }
-param: a=NAME b=annotation? { ast.arg(arg=a.string, annotation=b, LOCATIONS) }
+param: a=NAME b=annotation? { ast.arg(arg=a.value, annotation=b, LOCATIONS) }
 annotation: ':' a=expression { a }
 default: '=' a=expression { a }
 
@@ -812,7 +804,7 @@ try_stmt[ast.Try]:
 
 except_block[ast.ExceptHandler]:
     | invalid_except_stmt_indent
-    | 'except' e=expression t=['as' z=NAME { z.string }] ':' b=block {
+    | 'except' e=expression t=['as' z=NAME { z.value }] ':' b=block {
         ast.ExceptHandler(type=e, name=t, body=b, LOCATIONS) }
     | 'except' ':' b=block { ast.ExceptHandler(type=None, name=None, body=b, LOCATIONS) }
     | invalid_except_stmt
@@ -908,16 +900,16 @@ complex_number:
      }
 
 signed_number:
-    | a=NUMBER { ast.Constant(value=ast.literal_eval(a.string), LOCATIONS) }
+    | a=NUMBER { ast.Constant(value=ast.literal_eval(a.value), LOCATIONS) }
     | '-' a=NUMBER {
         ast.UnaryOp(
             op=ast.USub(),
             operand=ast.Constant(
-                value=ast.literal_eval(a.string),
-                lineno=a.start[0],
-                col_offset=a.start[1],
-                end_lineno=a.end[0],
-                end_col_offset=a.end[1]
+                value=ast.literal_eval(a.value),
+                lineno=a.lineno,
+                col_offset=a.column,
+                end_lineno=a.end_lineno,
+                end_col_offset=a.end_column
             ),
             LOCATIONS,
         )
@@ -928,10 +920,10 @@ signed_real_number:
     | '-' real=real_number { ast.UnaryOp(op=ast.USub(), operand=real, LOCATIONS) }
 
 real_number[ast.Constant]:
-    | real=NUMBER { ast.Constant(value=self.ensure_real(real.string), LOCATIONS) }
+    | real=NUMBER { ast.Constant(value=self.ensure_real(real.value), LOCATIONS) }
 
 imaginary_number[ast.Constant]:
-    | imag=NUMBER { ast.Constant(value=self.ensure_imaginary(imag.string), LOCATIONS) }
+    | imag=NUMBER { ast.Constant(value=self.ensure_imaginary(imag.value), LOCATIONS) }
 
 capture_pattern:
     | target=pattern_capture_target {
@@ -939,7 +931,7 @@ capture_pattern:
      }
 
 pattern_capture_target[str]:
-    | !"_" name=NAME !('.' | '(' | '=') { name.string }
+    | !"_" name=NAME !('.' | '(' | '=') { name.value }
 
 wildcard_pattern["ast.MatchAs"]:
     | "_" { ast.MatchAs(pattern=None, target=None, LOCATIONS) }
@@ -949,12 +941,12 @@ value_pattern["ast.MatchValue"]:
 
 attr[ast.Attribute]:
     | value=name_or_attr '.' attr=NAME {
-        ast.Attribute(value=value, attr=attr.string, ctx=Load, LOCATIONS)
+        ast.Attribute(value=value, attr=attr.value, ctx=Load, LOCATIONS)
      }
 
 name_or_attr:
     | attr
-    | name=NAME { ast.Name(id=name.string, ctx=Load, LOCATIONS) }
+    | name=NAME { ast.Name(id=name.value, ctx=Load, LOCATIONS) }
 
 group_pattern:
     | '(' pattern=pattern ')' { pattern }
@@ -1043,7 +1035,7 @@ keyword_patterns:
     | ','.keyword_pattern+
 
 keyword_pattern:
-    | arg=NAME '=' value=pattern { (arg.string, value) }
+    | arg=NAME '=' value=pattern { (arg.value, value) }
 
 # EXPRESSIONS
 # -----------
@@ -1089,12 +1081,12 @@ assignment_expression:
             "The ':=' operator is",
             ast.NamedExpr(
                 target=ast.Name(
-                    id=a.string,
+                    id=a.value,
                     ctx=Store,
-                    lineno=a.start[0],
-                    col_offset=a.start[1],
-                    end_lineno=a.end[0],
-                    end_col_offset=a.end[1]
+                    lineno=a.lineno,
+                    col_offset=a.column,
+                    end_lineno=a.end_lineno,
+                    end_col_offset=a.end_column
                 ),
                 value=b,
                 LOCATIONS,
@@ -1212,7 +1204,7 @@ await_primary (memo):
     | primary
 
 primary:
-    | a=primary '.' b=NAME { ast.Attribute(value=a, attr=b.string, ctx=Load, LOCATIONS) }
+    | a=primary '.' b=NAME { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
     | a=primary b=genexp { ast.Call(func=a, args=[b], keywords=[], LOCATIONS) }
     | a=primary '(' b=[arguments] ')' {
         ast.Call(
@@ -1254,7 +1246,7 @@ slice:
      }
 
 atom:
-    | a=NAME { ast.Name(id=a.string, ctx=Load, LOCATIONS) }
+    | a=NAME { ast.Name(id=a.value, ctx=Load, LOCATIONS) }
     | 'True' {
         ast.Constant(value=True, LOCATIONS)
         if sys.version_info >= (3, 9) else
@@ -1272,9 +1264,9 @@ atom:
      }
     | &STRING strings
     | a=NUMBER {
-        ast.Constant(value=ast.literal_eval(a.string), LOCATIONS)
+        ast.Constant(value=ast.literal_eval(a.value), LOCATIONS)
         if sys.version_info >= (3, 9) else
-        ast.Constant(value=ast.literal_eval(a.string), kind=None, LOCATIONS)
+        ast.Constant(value=ast.literal_eval(a.value), kind=None, LOCATIONS)
      }
     | &'(' (tuple | group | genexp)
     | &'[' (list | listcomp)
@@ -1350,9 +1342,9 @@ lambda_param_maybe_default[Tuple[ast.arg, Any]]:
     | a=lambda_param c=default? ',' { (a, c) }
     | a=lambda_param c=default? &':' { (a, c) }
 lambda_param[ast.arg]: a=NAME {
-    ast.arg(arg=a.string, annotation=None, LOCATIONS)
+    ast.arg(arg=a.value, annotation=None, LOCATIONS)
     if sys.version_info >= (3, 9) else
-    ast.arg(arg=a.string, annotation=None, type_comment=None, LOCATIONS)
+    ast.arg(arg=a.value, annotation=None, type_comment=None, LOCATIONS)
 }
 
 # LITERALS
@@ -1451,12 +1443,12 @@ starred_expression:
 
 kwarg_or_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=a.string, value=b, LOCATIONS) }
+    | a=NAME '=' b=expression { ast.keyword(arg=a.value, value=b, LOCATIONS) }
     | a=starred_expression { a }
 
 kwarg_or_double_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=a.string, value=b, LOCATIONS) }   # XXX Unreachable
+    | a=NAME '=' b=expression { ast.keyword(arg=a.value, value=b, LOCATIONS) }   # XXX Unreachable
     | '**' a=expression { ast.keyword(arg=None, value=a, LOCATIONS) }
 
 # ASSIGNMENT TARGETS
@@ -1485,28 +1477,28 @@ star_target (memo):
     | target_with_star_atom
 
 target_with_star_atom (memo):
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.string, ctx=Store, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Store, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Store, LOCATIONS) }
     | star_atom
 
 star_atom:
-    | a=NAME { ast.Name(id=a.string, ctx=Store, LOCATIONS) }
+    | a=NAME { ast.Name(id=a.value, ctx=Store, LOCATIONS) }
     | '(' a=target_with_star_atom ')' { self.set_expr_context(a, Store) }
     | '(' a=[star_targets_tuple_seq] ')' { ast.Tuple(elts=a, ctx=Store, LOCATIONS) }
     | '[' a=[star_targets_list_seq] ']' {  ast.List(elts=a, ctx=Store, LOCATIONS) }
 
 single_target:
     | single_subscript_attribute_target
-    | a=NAME { ast.Name(id=a.string, ctx=Store, LOCATIONS) }
+    | a=NAME { ast.Name(id=a.value, ctx=Store, LOCATIONS) }
     | '(' a=single_target ')' { a }
 
 single_subscript_attribute_target:
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.string, ctx=Store, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Store, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Store, LOCATIONS) }
 
 
 t_primary:
-    | a=t_primary '.' b=NAME &t_lookahead { ast.Attribute(value=a, attr=b.string, ctx=Load, LOCATIONS) }
+    | a=t_primary '.' b=NAME &t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
     | a=t_primary '[' b=slices ']' &t_lookahead { ast.Subscript(value=a, slice=b, ctx=Load, LOCATIONS) }
     | a=t_primary b=genexp &t_lookahead { ast.Call(func=a, args=[b], keywords=[], LOCATIONS) }
     | a=t_primary '(' b=[arguments] ')' &t_lookahead {
@@ -1527,12 +1519,12 @@ t_lookahead: '(' | '[' | '.'
 del_targets: a=','.del_target+ [','] { a }
 
 del_target (memo):
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.string, ctx=Del, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Del, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Del, LOCATIONS) }
     | del_t_atom
 
 del_t_atom:
-    | a=NAME { ast.Name(id=a.string, ctx=Del, LOCATIONS) }
+    | a=NAME { ast.Name(id=a.value, ctx=Del, LOCATIONS) }
     | '(' a=del_target ')' { self.set_expr_context(a, Del) }
     | '(' a=[del_targets] ')' { ast.Tuple(elts=a, ctx=Del, LOCATIONS) }
     | '[' a=[del_targets] ']' { ast.List(elts=a, ctx=Del, LOCATIONS) }
@@ -1552,7 +1544,7 @@ type_expressions[list]:
     | a=','.expression+ {a}
 
 func_type_comment:
-    | NEWLINE t=TYPE_COMMENT &(NEWLINE INDENT) { t.string }  # Must be followed by indented block
+    | NEWLINE t=TYPE_COMMENT &(NEWLINE INDENT) { t.value }  # Must be followed by indented block
     | invalid_double_type_comments
     | TYPE_COMMENT
 
@@ -1619,8 +1611,8 @@ expression_without_invalid[ast.AST]:
 invalid_legacy_expression:
     | a=NAME !'(' b=expression_without_invalid {
         self.raise_syntax_error_known_range(
-            f"Missing parentheses in call to '{a.string}' . Did you mean {a.string}(...)?", a, b,
-        ) if a.string in ("exec", "print") else
+            "Missing parentheses in call to '%s'. Did you mean '%s'(...)?" % (a.value, a.value), a, b,
+        ) if a.value in ("exec", "print") else
         None
      }
 invalid_expression[NoReturn]:
@@ -1636,7 +1628,7 @@ invalid_expression[NoReturn]:
 invalid_named_expression[NoReturn]:
     | a=expression ':=' expression {
         self.store_syntax_error_known_location(
-            f"cannot use assignment expressions with {self.get_expr_name(a)}", a
+            "cannot use assignment expressions with %s" % (self.get_expr_name(a), ), a
         )
      }
     # Use in_raw_rule
@@ -1654,7 +1646,7 @@ invalid_named_expression[NoReturn]:
             None
             if self.in_recursive_rule else
             self.store_syntax_error_known_range(
-                f"cannot assign to {self.get_expr_name(a)} here. Maybe you meant '==' instead of '='?", a, b
+                "cannot assign to %s here. Maybe you meant '==' instead of '='?" % (self.get_expr_name(a), ), a, b
             )
         )
      }
@@ -1662,7 +1654,7 @@ invalid_named_expression[NoReturn]:
 invalid_assignment[NoReturn]:
     | a=invalid_ann_assign_target ':' expression {
         self.store_syntax_error_known_location(
-            f"only single target (not {self.get_expr_name(a)}) can be annotated", a
+            "only single target (not {self.get_expr_name(a)}) can be annotated", a
         )
      }
     | a=star_named_expression ',' star_named_expressions* ':' expression {
@@ -1670,14 +1662,14 @@ invalid_assignment[NoReturn]:
     | a=expression ':' expression {
         self.store_syntax_error_known_location("illegal target for annotation", a) }
     | (star_targets '=')* a=star_expressions '=' {
-        self.store_syntax_error_known_location(f"cannot assign to {self.get_expr_name(a)}", a)
+        self.store_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
      }
     | (star_targets '=')* a=yield_expr '=' {
         self.store_syntax_error_known_location("assignment to yield expression not possible", a)
      }
     | a=star_expressions augassign (yield_expr | star_expressions) {
         self.store_syntax_error_known_location(
-            f"{self.get_expr_name(a)} is an illegal expression for augmented assignment", a
+            "{self.get_expr_name(a)} is an illegal expression for augmented assignment", a
         )
      }
 invalid_ann_assign_target[ast.AST]:
@@ -1686,7 +1678,7 @@ invalid_ann_assign_target[ast.AST]:
     | '(' a=invalid_ann_assign_target ')' { a }
 invalid_del_stmt[NoReturn]:
     | 'del' a=star_expressions {
-        self.raise_syntax_error_known_location(f"cannot delete {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot delete {self.get_expr_name(a)}", a)
      }
 invalid_block[NoReturn]:
     | NEWLINE !INDENT { self.raise_indentation_error("expected an indented block") }
@@ -1737,12 +1729,12 @@ invalid_double_type_comments[NoReturn]:
      }
 invalid_with_item[NoReturn]:
     | expression 'as' a=expression &(',' | ')' | ':') {
-        self.raise_syntax_error_known_location(f"cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
      }
 
 invalid_for_target[NoReturn]:
     | 'async'? 'for' a=star_expressions {
-        self.raise_syntax_error_known_location(f"cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
      }
 
 invalid_group[NoReturn]:
@@ -1763,19 +1755,19 @@ invalid_with_stmt[None]:
 invalid_with_stmt_indent[NoReturn]:
     | ['async'] a='with' ','.(expression ['as' star_target])+ ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'with' statement on line {a.start[0]}"
+            "expected an indented block after 'with' statement on line {a.lineno}"
         )
      }
     | ['async'] a='with' '(' ','.(expressions ['as' star_target])+ ','? ')' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'with' statement on line {a.start[0]}"
+            "expected an indented block after 'with' statement on line {a.lineno}"
         )
      }
 
 invalid_try_stmt[NoReturn]:
     | a='try' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'try' statement on line {a.start[0]}",
+            "expected an indented block after 'try' statement on line {a.lineno}",
         )
      }
     | 'try' ':' block !('except' | 'finally') {
@@ -1790,18 +1782,18 @@ invalid_except_stmt[None]:
 invalid_finally_stmt[NoReturn]:
     | a='finally' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'finally' statement on line {a.start[0]}"
+            "expected an indented block after 'finally' statement on line {a.lineno}"
         )
      }
 invalid_except_stmt_indent[NoReturn]:
     | a='except' expression ['as' NAME ] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'except' statement on line {a.start[0]}"
+            "expected an indented block after 'except' statement on line {a.lineno}"
         )
      }
     | a='except' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'except' statement on line {a.start[0]}"
+            "expected an indented block after 'except' statement on line {a.lineno}"
         )
      }
 invalid_match_stmt[NoReturn]:
@@ -1817,7 +1809,7 @@ invalid_match_stmt[NoReturn]:
             (3, 10),
             "Pattern matching is",
             self.raise_indentation_error(
-                f"expected an indented block after 'match' statement on line {a.start[0]}"
+                "expected an indented block after 'match' statement on line {a.lineno}"
             )
         )
      }
@@ -1825,7 +1817,7 @@ invalid_case_block[NoReturn]:
     | "case" patterns guard? !':' { self.store_syntax_error("expected ':'") }
     | a="case" patterns guard? ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'case' statement on line {a.start[0]}"
+            "expected an indented block after 'case' statement on line {a.lineno}"
         )
      }
 invalid_as_pattern[NoReturn]:
@@ -1847,45 +1839,45 @@ invalid_if_stmt[NoReturn]:
     | 'if' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='if' a=named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'if' statement on line {a.start[0]}"
+            "expected an indented block after 'if' statement on line {a.lineno}"
         )
      }
 invalid_elif_stmt[NoReturn]:
     | 'elif' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='elif' named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'elif' statement on line {a.start[0]}"
+            "expected an indented block after 'elif' statement on line {a.lineno}"
         )
      }
 invalid_else_stmt[NoReturn]:
     | a='else' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'else' statement on line {a.start[0]}"
+            "expected an indented block after 'else' statement on line {a.lineno}"
         )
      }
 invalid_while_stmt[NoReturn]:
     | 'while' named_expression NEWLINE { self.store_syntax_error("expected ':'") }
     | a='while' named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'while' statement on line {a.start[0]}"
+            "expected an indented block after 'while' statement on line {a.lineno}"
         )
      }
 invalid_for_stmt[NoReturn]:
     | ['async'] a='for' star_targets 'in' star_expressions ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after 'for' statement on line {a.start[0]}"
+            "expected an indented block after 'for' statement on line {a.lineno}"
         )
      }
 invalid_def_raw[NoReturn]:
     | ['async'] a='def' NAME '(' [params] ')' ['->' expression] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after function definition on line {a.start[0]}"
+            "expected an indented block after function definition on line {a.lineno}"
         )
      }
 invalid_class_def_raw[NoReturn]:
     | a='class' NAME ['(' [arguments] ')'] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            f"expected an indented block after class definition on line {a.start[0]}"
+            "expected an indented block after class definition on line {a.lineno}"
         )
      }
 
