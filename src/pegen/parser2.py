@@ -2,11 +2,12 @@
 import argparse
 import sys
 import time
-from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 import traceback
 from abc import abstractmethod
 
 from pegen.tokenizer2 import Mark, Tokenizer, exact_token_types
+
+from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 
 globals().update(pytoken.python_tokens)
 
