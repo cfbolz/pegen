@@ -235,6 +235,11 @@ class Parser:
             return self._tokenizer.getnext()
         return None
 
+    def expect_type(self, type):
+        tok = self._tokenizer.peek()
+        if tok.token_type == type:
+            return self._tokenizer.getnext()
+
     def expect_forced(self, res, expectation):
         if res is None:
             raise self.make_syntax_error("expected {expectation}")

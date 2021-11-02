@@ -99,6 +99,7 @@ class PythonCallMakerVisitor(GrammarVisitor):
         self.soft_keywords: Set[str] = set()
 
     def visit_NameLeaf(self, node: NameLeaf) -> Tuple[Optional[str], str]:
+        import pytoken
         name = node.value
         if name == "SOFT_KEYWORD":
             return "soft_keyword", "self.soft_keyword()"
@@ -106,18 +107,31 @@ class PythonCallMakerVisitor(GrammarVisitor):
             name = name.lower()
             return name, f"self.{name}()"
         if name in ("NEWLINE", "DEDENT", "INDENT", "ENDMARKER", "ASYNC", "AWAIT"):
+            # pre-lookup the correct type
+            if name in pytoken.python_tokens:
+                type = pytoken.python_tokens[name]
+                call = f"self.expect_type({type!r})"
+            else:
+                call = f"self.expect({name!r})"
             # Avoid using names that can be Python keywords
-            return "_" + name.lower(), f"self.expect({name!r})"
+            return "_" + name.lower(), call
         return name, f"self.{name}()"
 
     def visit_StringLeaf(self, node: StringLeaf) -> Tuple[str, str]:
+        import pytoken
         val = ast.literal_eval(node.value)
+        call = f"self.expect({node.value})"
         if re.match(r"[a-zA-Z_]\w*\Z", val):  # This is a keyword
             if node.value.endswith("'"):
                 self.keywords.add(val)
             else:
                 self.soft_keywords.add(val)
-        return "literal", f"self.expect({node.value})"
+        else:
+            op = node.value.strip("'")
+            if op in pytoken.python_opmap:
+                type = pytoken.python_opmap[op]
+                call = f"self.expect_type({type!r})"
+        return "literal", call
 
     def visit_Rhs(self, node: Rhs) -> Tuple[Optional[str], str]:
         if node in self.cache:
@@ -188,13 +202,14 @@ class PythonCallMakerVisitor(GrammarVisitor):
         return "cut", "True"
 
     def visit_Forced(self, node: Forced) -> Tuple[str, str]:
+        import pytoken
+        name, call = self.visit(node.node)
         if isinstance(node.node, Group):
-            _, val = self.visit(node.node.rhs)
-            return "forced", f"self.expect_forced({val}, '''({node.node.rhs!s})''')"
+            return name, f"self.expect_forced({call}, '''({node.node.rhs!s})''')"
         else:
             return (
-                "forced",
-                f"self.expect_forced(self.expect({node.node.value}), {node.node.value!r})",
+                name,
+                f"self.expect_forced({call}, {node.node.value!r})",
             )
 
 
