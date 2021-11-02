@@ -31,18 +31,11 @@ MODULE_PREFIX = """\
 
 # Special RPython version
 
-import ast
 import sys
-import tokenize
-
-from pegen.parser2 import memoize, memoize_left_rec, logger, Parser
 
 """
 MODULE_SUFFIX = """
 
-if __name__ == '__main__':
-    from pegen.parser2 import simple_parser_main
-    simple_parser_main({class_name})
 """
 
 
