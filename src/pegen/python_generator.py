@@ -279,7 +279,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 # Non-leader rules in a cycle are not memoized,
                 # but they must still be logged.
                 self.print("@logger")
-        else:
+        elif node.memo:
             self.print("@memoize")
         node_type = node.type or "Any"
         self.print(f"def {node.name}(self): # type Optional[{node_type}]")

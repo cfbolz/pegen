@@ -178,49 +178,42 @@ class Parser:
         tok = self._tokenizer.peek()
         return "{tok.start[0]}.{tok.start[1]}: {token.tok_name[tok.token_type]}:{tok.value!r}"
 
-    @memoize
     def name(self):
         tok = self._tokenizer.peek()
         if tok.token_type == NAME and tok.value not in self.KEYWORDS:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def number(self):
         tok = self._tokenizer.peek()
         if tok.token_type == NUMBER:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def string(self):
         tok = self._tokenizer.peek()
         if tok.token_type == STRING:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def op(self):
         tok = self._tokenizer.peek()
         if tok.token_type == OP:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def type_comment(self):
         tok = self._tokenizer.peek()
         if tok.token_type == TYPE_COMMENT:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def soft_keyword(self):
         tok = self._tokenizer.peek()
         if tok.token_type == NAME and tok.value in self.SOFT_KEYWORDS:
             return self._tokenizer.getnext()
         return None
 
-    @memoize
     def expect(self, type):
         tok = self._tokenizer.peek()
         if tok.value == type:
