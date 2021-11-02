@@ -4,7 +4,6 @@
 
 @subheader'''
 import io
-import itertools
 import os
 import sys
 import token
@@ -424,7 +423,7 @@ fstring[ast.Expr]: star_expressions
 # GENERAL STATEMENTS
 # ==================
 
-statements[list]: a=statement+ { list(itertools.chain(*a)) }
+statements[list]: a=statement+ { [x for l in a for x in l] }
 
 statement[list]: a=compound_stmt { [a] } | a=simple_stmts { a }
 

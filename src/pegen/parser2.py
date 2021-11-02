@@ -171,6 +171,9 @@ class Parser:
         self._mark = self._tokenizer.mark
         self._reset = self._tokenizer.reset
 
+    def flatten(self, listoflists):
+        import pdb; pdb.set_trace()
+
     def start(self):
         pass
 
