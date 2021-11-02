@@ -12,7 +12,7 @@ from pypy.interpreter.astcompiler.astbuilder import ast_from_node
 from pypy.interpreter.astcompiler import ast, consts
 from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 
-from rpypegparse import PythonParser, Tokenizer
+from rpypegparse import PythonParser
 
 class TestAstBuilder:
 
@@ -27,8 +27,7 @@ class TestAstBuilder:
         tokengen = tokenize.generate_tokens(source.splitlines(True), 0)
         assert tokengen[-2].token_type == pytoken.python_tokens['NEWLINE']
         del tokengen[-2]
-        tokenizer = Tokenizer(tokengen, verbose=False)
-        parser = PythonParser(tokenizer, verbose=False)
+        parser = PythonParser(tokengen, verbose=False)
         self.space = parser.space
         if p_mode == "eval":
             res = parser.eval()

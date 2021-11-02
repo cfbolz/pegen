@@ -6,12 +6,12 @@
 import io
 import os
 import sys
-import token
-
-from pegen.tokenizer2 import Tokenizer
 
 from pypy.interpreter.astcompiler import ast
 from pypy.interpreter.astcompiler.astbuilder import parse_number
+
+from pypy.interpreter.pyparser.pygram import tokens
+from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 
 # Singleton ast nodes, created once for efficiency
 Load = ast.Load
@@ -47,45 +47,344 @@ EXPR_NAME_MAPPING = {
 }
 
 
-def parse_file(
-    path,
-    py_version,
-    token_stream_factory,
-    verbose,
-):
-    """Parse a file."""
-    with open(path) as f:
-        tok_stream = (
-            token_stream_factory(f.readline)
-            if token_stream_factory else
-            tokenize.generate_tokens(f.readline)
-        )
-        tokenizer = Tokenizer(tok_stream, verbose=verbose, path=path)
-        parser = PythonParser(
-            tokenizer,
-            verbose=verbose,
-            filename=os.path.basename(path),
-            py_version=py_version
-        )
-        return parser.parse("file")
 
 
-def parse_string(
-    source,
-    mode,
-    py_version,
-    token_stream_factory,
-    verbose,
-):
-    """Parse a string."""
-    tok_stream = (
-        token_stream_factory(io.StringIO(source).readline)
-        if token_stream_factory else
-        tokenize.generate_tokens(io.StringIO(source).readline)
-    )
-    tokenizer = Tokenizer(tok_stream, verbose=verbose)
-    parser = PythonParser(tokenizer, verbose=verbose, py_version=py_version)
-    return parser.parse(mode if mode == "eval" else "file")
+
+def logger(method):
+    """For non-memoized functions that we want to be logged.
+
+    (In practice this is only non-leader left-recursive functions.)
+    """
+    method_name = method.__name__
+
+    def logger_wrapper(self, *args):
+        if not self._verbose:
+            return method(self, *args)
+        argsr = ",".join(repr(arg) for arg in args)
+        fill = "  " * self._level
+        print "{fill}{method_name}({argsr}) .... (looking at {self.showpeek()})"
+        self._level += 1
+        tree = method(self, *args)
+        self._level -= 1
+        print "{fill}... {method_name}({argsr}) --> {tree!s:.200}"
+        return tree
+
+    logger_wrapper.__wrapped__ = method  # type: ignore
+    return logger_wrapper
+
+
+def memoize(method):
+    """Memoize a symbol method."""
+    method_name = method.__name__
+
+    def memoize_wrapper(self, *args):
+        mark = self._mark()
+        key = mark, method_name, args
+        # Fast path: cache hit, and not verbose.
+        if key in self._cache and not self._verbose:
+            tree, endmark = self._cache[key]
+            self._reset(endmark)
+            return tree
+        # Slow path: no cache hit, or verbose.
+        verbose = self._verbose
+        argsr = ",".join(repr(arg) for arg in args)
+        fill = "  " * self._level
+        if key not in self._cache:
+            if verbose:
+                print "{fill}{method_name}({argsr}) ... (looking at {self.showpeek()})"
+            self._level += 1
+            tree = method(self, *args)
+            self._level -= 1
+            if verbose:
+                print "{fill}... {method_name}({argsr}) -> {tree!s:.200}"
+            endmark = self._mark()
+            self._cache[key] = tree, endmark
+        else:
+            tree, endmark = self._cache[key]
+            if verbose:
+                print "{fill}{method_name}({argsr}) -> {tree!s:.200}"
+            self._reset(endmark)
+        return tree
+
+    memoize_wrapper.__wrapped__ = method  # type: ignore
+    return memoize_wrapper
+
+
+def memoize_left_rec(method):
+    """Memoize a left-recursive symbol method."""
+    method_name = method.__name__
+
+    def memoize_left_rec_wrapper(self):
+        mark = self._mark()
+        key = mark, method_name, ()
+        # Fast path: cache hit, and not verbose.
+        if key in self._cache and not self._verbose:
+            tree, endmark = self._cache[key]
+            self._reset(endmark)
+            return tree
+        # Slow path: no cache hit, or verbose.
+        verbose = self._verbose
+        fill = "  " * self._level
+        if key not in self._cache:
+            if verbose:
+                print "{fill}{method_name} ... (looking at {self.showpeek()})"
+            self._level += 1
+
+            # For left-recursive rules we manipulate the cache and
+            # loop until the rule shows no progress, then pick the
+            # previous result.  For an explanation why this works, see
+            # https://github.com/PhilippeSigaud/Pegged/wiki/Left-Recursion
+            # (But we use the memoization cache instead of a static
+            # variable; perhaps this is similar to a paper by Warth et al.
+            # (http://web.cs.ucla.edu/~todd/research/pub.php?id=pepm08).
+
+            # Prime the cache with a failure.
+            self._cache[key] = None, mark
+            lastresult, lastmark = None, mark
+            depth = 0
+            if verbose:
+                print "{fill}Recursive {method_name} at {mark} depth {depth}"
+
+            while True:
+                self._reset(mark)
+                self.in_recursive_rule += 1
+                try:
+                    result = method(self)
+                finally:
+                    self.in_recursive_rule -= 1
+                endmark = self._mark()
+                depth += 1
+                if verbose:
+                    print "{fill}Recursive {method_name} at {mark} depth {depth}: {result!s:.200} to {endmark}"
+                if not result:
+                    if verbose:
+                        print "{fill}Fail with {lastresult!s:.200} to {lastmark}"
+                    break
+                if endmark <= lastmark:
+                    if verbose:
+                        print "{fill}Bailing with {lastresult!s:.200} to {lastmark}"
+                    break
+                self._cache[key] = lastresult, lastmark = result, endmark
+
+            self._reset(lastmark)
+            tree = lastresult
+
+            self._level -= 1
+            if verbose:
+                print "{fill}{method_name}() -> {tree!s:.200} [cached]"
+            if tree:
+                endmark = self._mark()
+            else:
+                endmark = mark
+                self._reset(endmark)
+            self._cache[key] = tree, endmark
+        else:
+            tree, endmark = self._cache[key]
+            if verbose:
+                print "{fill}{method_name}() -> {tree!s:.200} [fresh]"
+            if tree:
+                self._reset(endmark)
+        return tree
+
+    memoize_left_rec_wrapper.__wrapped__ = method  # type: ignore
+    return memoize_left_rec_wrapper
+
+
+class Parser:
+    """Parsing base class."""
+
+    # KEYWORDS: ClassVar[Tuple[str, ...]]
+
+    # SOFT_KEYWORDS: ClassVar[Tuple[str, ...]]
+
+    def __init__(self, tokengen, verbose=False):
+        # initialize tokenization stuff
+        self._tokens = []
+        self._lines = {}
+        self._path = "" # XXX
+        for tok in tokengen:
+            if tok.token_type in (tokens.NL, tokens.COMMENT):
+                continue
+            if tok.token_type == tokens.ERRORTOKEN and tok.value.isspace():
+                continue
+            if (
+                tok.token_type == tokens.NEWLINE
+                and self._tokens
+                and self._tokens[-1].token_type == tokens.NEWLINE
+            ):
+                continue
+            self._tokens.append(tok)
+            if not self._path:
+                self._lines[tok.lineno] = tok.line
+        self._index = 0
+        self._verbose = verbose
+
+        # parser stuff
+        self._verbose = verbose
+        self._level = 0
+        self._cache = {}
+        # Integer tracking wether we are in a left recursive rule or not. Can be useful
+        # for error reporting.
+        self.in_recursive_rule = 0
+
+
+    # tokenizer methods
+
+    def _mark(self):
+        return self._index
+
+    def getnext(self):
+        """Return the next token and updates the index."""
+        cached = not self._index == len(self._tokens)
+        tok = self.peek()
+        self._index += 1
+        if self._verbose:
+            self.report(cached, False)
+        return tok
+
+    def peek(self):
+        """Return the next token *without* updating the index."""
+        assert self._index < len(self._tokens)
+        return self._tokens[self._index]
+
+    def diagnose(self):
+        if not self._tokens:
+            self.getnext()
+        return self._tokens[-1]
+
+    def get_last_non_whitespace_token(self):
+        for tok in reversed(self._tokens[: self._index]):
+            if tok.token_type != tokens.ENDMARKER and (
+                tok.token_type < tokens.NEWLINE or tok.token_type > tokens.DEDENT
+            ):
+                break
+        return tok
+
+    def get_lines(self, line_numbers):
+        """Retrieve source lines corresponding to line numbers."""
+        if self._lines:
+            lines = self._lines
+        else:
+            n = len(line_numbers)
+            lines = {}
+            count = 0
+            seen = 0
+            with open(self._path) as f:
+                for l in f:
+                    count += 1
+                    if count in line_numbers:
+                        seen += 1
+                        lines[count] = l
+                        if seen == n:
+                            break
+
+        return [lines[n] for n in line_numbers]
+
+    def _reset(self, index):
+        if index == self._index:
+            return
+        assert 0 <= index <= len(self._tokens), (index, len(self._tokens))
+        old_index = self._index
+        self._index = index
+        if self._verbose:
+            self.report(True, index < old_index)
+
+    def report(self, cached, back):
+        if back:
+            fill = "-" * self._index + "-"
+        elif cached:
+            fill = "-" * self._index + ">"
+        else:
+            fill = "-" * self._index + "*"
+        if self._index == 0:
+            print("{fill} (Bof)")
+        else:
+            tok = self._tokens[self._index - 1]
+            print("{fill} {shorttok(tok)}")
+    # parser methods
+
+    def start(self):
+        pass
+
+    def showpeek(self):
+        tok = self.peek()
+        return "{tok.start[0]}.{tok.start[1]}: {token.tok_name[tok.token_type]}:{tok.value!r}"
+
+    def name(self):
+        tok = self.peek()
+        if tok.token_type == tokens.NAME and tok.value not in self.KEYWORDS:
+            return self.getnext()
+        return None
+
+    def number(self):
+        tok = self.peek()
+        if tok.token_type == tokens.NUMBER:
+            return self.getnext()
+        return None
+
+    def string(self):
+        tok = self.peek()
+        if tok.token_type == tokens.STRING:
+            return self.getnext()
+        return None
+
+    def op(self):
+        tok = self.peek()
+        if tok.token_type == tokens.OP:
+            return self.getnext()
+        return None
+
+    def type_comment(self):
+        tok = self.peek()
+        if tok.token_type == tokens.TYPE_COMMENT:
+            return self.getnext()
+        return None
+
+    def soft_keyword(self):
+        tok = self.peek()
+        if tok.token_type == tokens.NAME and tok.value in self.SOFT_KEYWORDS:
+            return self.getnext()
+        return None
+
+    def expect(self, type):
+        tok = self.peek()
+        if tok.value == type:
+            return self.getnext()
+        if type in pytoken.python_opmap:
+            if tok.token_type == pytoken.python_opmap[type]:
+                return self.getnext()
+        if type in pytoken.python_tokens:
+            if tok.token_type == pytoken.python_tokens[type]:
+                return self.getnext()
+        if tok.token_type == tokens.OP and tok.value == type:
+            return self.getnext()
+        return None
+
+    def expect_type(self, type):
+        tok = self.peek()
+        if tok.token_type == type:
+            return self.getnext()
+
+    def expect_forced(self, res, expectation):
+        if res is None:
+            raise self.make_syntax_error("expected {expectation}")
+        return res
+
+    def positive_lookahead(self, func, *args):
+        mark = self._mark()
+        ok = func(*args)
+        self._reset(mark)
+        return ok
+
+    def negative_lookahead(self, func, *args):
+        mark = self._mark()
+        ok = func(*args)
+        self._reset(mark)
+        return not ok
+
+    def make_syntax_error(self, message, filename):
+        tok = self.diagnose()
+        return SyntaxError(message, (filename, tok.start[0], 1 + tok.start[1], tok.line))
 
 BaseParser = Parser
 
@@ -183,10 +482,8 @@ class Parser(Parser):
                 feature_version = self.py_version[1]
             def recursive_parse_to_ast(self, str, info):
                 from pypy.interpreter.pyparser import pytokenizer as tokenize
-                from pegen.tokenizer2 import Tokenizer
                 tokengen = tokenize.generate_tokens(str.splitlines(), 0)
-                tokenizer = Tokenizer(tokengen, verbose=False)
-                parser = PythonParser(tokenizer, verbose=False)
+                parser = PythonParser(tokengen, verbose=False)
                 return parser.eval()
             def check_feature(self, condition, version, msg, n):
                  if condition and self.compile_info.feature_version < version:
@@ -311,7 +608,7 @@ class Parser(Parser):
         from pypy.interpreter.pyparser.error import SyntaxError
         line_from_token = start is None and end is None
         if start is None or end is None:
-            tok = self._tokenizer.diagnose()
+            tok = self.diagnose()
             start = start or (tok.lineno, tok.column)
             end = end or (tok.end_lineno, tok.end_column)
 
@@ -320,7 +617,7 @@ class Parser(Parser):
         else:
             # End is used only to get the proper text
             line = "\\n".join(
-                self._tokenizer.get_lines(list(range(start[0], end[0] + 1)))
+                self.get_lines(list(range(start[0], end[0] + 1)))
             )
 
         self._exception = SyntaxError(

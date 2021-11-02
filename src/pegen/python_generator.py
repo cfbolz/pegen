@@ -289,7 +289,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 self.print(f"# nullable={node.nullable}")
             self.print("mark = self._mark()")
             if self.alts_uses_locations(node.rhs.alts):
-                self.print("tok = self._tokenizer.peek()")
+                self.print("tok = self.peek()")
                 self.print("start_lineno, start_col_offset = tok.lineno, tok.column")
             if is_loop:
                 self.print("children = []")
@@ -381,7 +381,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                         else:
                             action = f"[{', '.join(self.local_variable_names)}]"
                 elif "LOCATIONS" in action:
-                    self.print("tok = self._tokenizer.get_last_non_whitespace_token()")
+                    self.print("tok = self.get_last_non_whitespace_token()")
                     self.print("end_lineno, end_col_offset = tok.end_lineno, tok.end_column")
                     action = action.replace("LOCATIONS", self.location_formatting)
 
