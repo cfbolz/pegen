@@ -83,6 +83,11 @@ class TestAstBuilder:
         mod = self.get_ast("def f():\n pass")
         assert mod
 
+    def test_error(self):
+        with pytest.raises(SyntaxError) as excinfo:
+            self.get_ast("del lambda x: 1")
+        assert excinfo.value.msg == "cannot delete lambda"
+
     def test_del(self):
         d = self.get_first_stmt("del x")
         assert isinstance(d, ast.Delete)

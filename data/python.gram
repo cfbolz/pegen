@@ -1694,7 +1694,7 @@ invalid_ann_assign_target[ast.AST]:
     | '(' a=invalid_ann_assign_target ')' { a }
 invalid_del_stmt[NoReturn]:
     | 'del' a=star_expressions {
-        self.raise_syntax_error_known_location("cannot delete {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot delete %s" % (self.get_expr_name(a), ), a)
      }
 invalid_block[NoReturn]:
     | NEWLINE !INDENT { self.raise_indentation_error("expected an indented block") }
