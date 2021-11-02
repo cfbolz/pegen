@@ -15,12 +15,25 @@ class Tokenizer:
     """
 
     def __init__(self, tokengen, path="", verbose=False):
-        self._tokengen = iter(tokengen)
         self._tokens = []
-        self._index = 0
-        self._verbose = verbose
         self._lines = {}
         self._path = path
+        for tok in tokengen:
+            if tok.token_type in (tokens.NL, tokens.COMMENT):
+                continue
+            if tok.token_type == tokens.ERRORTOKEN and tok.value.isspace():
+                continue
+            if (
+                tok.token_type == tokens.NEWLINE
+                and self._tokens
+                and self._tokens[-1].token_type == tokens.NEWLINE
+            ):
+                continue
+            self._tokens.append(tok)
+            if not self._path:
+                self._lines[tok.lineno] = tok.line
+        self._index = 0
+        self._verbose = verbose
         if verbose:
             self.report(False, False)
 
@@ -35,21 +48,7 @@ class Tokenizer:
 
     def peek(self):
         """Return the next token *without* updating the index."""
-        while self._index == len(self._tokens):
-            tok = next(self._tokengen)
-            if tok.token_type in (tokens.NL, tokens.COMMENT):
-                continue
-            if tok.token_type == tokens.ERRORTOKEN and tok.value.isspace():
-                continue
-            if (
-                tok.token_type == tokens.NEWLINE
-                and self._tokens
-                and self._tokens[-1].token_type == tokens.NEWLINE
-            ):
-                continue
-            self._tokens.append(tok)
-            if not self._path:
-                self._lines[tok.lineno] = tok.line
+        assert self._index < len(self._tokens)
         return self._tokens[self._index]
 
     def diagnose(self):
