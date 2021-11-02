@@ -295,8 +295,8 @@ class Parser(Parser):
 
         return ast.arguments(
             posonlyargs=pos_only,
-            args=params,
-            defaults=defaults,
+            args=params if params else None,
+            defaults=defaults if defaults else None,
             vararg=after_star[0],
             kwonlyargs=[p for p, _ in after_star[1]],
             kw_defaults=[d for _, d in after_star[1]],
@@ -309,11 +309,12 @@ class Parser(Parser):
         start,
         end,
     ):
+        from pypy.interpreter.pyparser.error import SyntaxError
         line_from_token = start is None and end is None
         if start is None or end is None:
             tok = self._tokenizer.diagnose()
             start = start or (tok.lineno, tok.column)
-            end = end or (tok.end_lineno, t.end_column)
+            end = end or (tok.end_lineno, tok.end_column)
 
         if line_from_token:
             line = tok.line
@@ -325,19 +326,19 @@ class Parser(Parser):
 
         self._exception = SyntaxError(
             message,
-            (self.filename, start[0], start[1], line)
+            start[0], start[1], line + "\\n", self.filename, lastlineno=end[0]
         )
 
     def store_syntax_error(self, message):
         self._store_syntax_error(message)
 
     def make_syntax_error(self, message):
-        self._store_syntax_error(message)
+        self._store_syntax_error(message, None, None)
         return self._exception
 
     def store_syntax_error_known_location(self, message, node):
         """Store a syntax error that occured at a given AST node."""
-        if isinstance(node, tokenize.TokenInfo):
+        if not isinstance(node, ast.AST):
             start = node.lineno, node.column
             end = node.end_lineno, node.end_column
         else:
@@ -352,13 +353,13 @@ class Parser(Parser):
         start_node,
         end_node,
     ):
-        if isinstance(start_node, tokenize.TokenInfo):
+        if not isinstance(start_node, ast.AST):
             start = start_node.lineno, start_node.col_offset
         else:
             start = start_node.lineno, start_node.col_offset
 
-        if isinstance(end_node, tokenize.TokenInfo):
-            end = node.end_lineno, node.end_column
+        if not isinstance(end_node, ast.AST):
+            end = end_node.end_lineno, end_node.end_column
         else:
             end = end_node.end_lineno, end_node.end_col_offset
 
@@ -369,7 +370,7 @@ class Parser(Parser):
         message,
         start_node,
     ):
-        if isinstance(start_node, tokenize.TokenInfo): # XXX???
+        if not isinstance(start_node, ast.AST):
             start = start_node.lineno, start_node.col_offset
         else:
             start = start_node.lineno, start_node.col_offset
@@ -377,7 +378,7 @@ class Parser(Parser):
         self._store_syntax_error(message, start, None)
 
     def raise_syntax_error(self, message):
-        self._store_syntax_error(message)
+        self._store_syntax_error(message, None, None)
         raise self._exception
 
     def raise_syntax_error_known_location(
@@ -414,7 +415,7 @@ class Parser(Parser):
 
 start: file
 
-file[ast.Module]: a=[statements] ENDMARKER { ast.Module(body=a or [], type_ignores=[]) }
+file[ast.Module]: a=[statements] ENDMARKER { ast.Module(body=a, type_ignores=None) }
 interactive[ast.Interactive]: a=statement_newline { ast.Interactive(body=a) }
 eval[ast.Expression]: a=expressions NEWLINE* ENDMARKER { ast.Expression(body=a) }
 func_type[ast.FunctionType]: '(' a=[type_expressions] ')' '->' b=expression NEWLINE* ENDMARKER { ast.FunctionType(argtypes=a, returns=b) }
@@ -565,8 +566,6 @@ import_from[ast.ImportFrom]:
         ast.ImportFrom(module=b, names=c, level=self.extract_import_level(a), LOCATIONS)
      }
     | 'from' a=('.' | '...')+ 'import' b=import_from_targets {
-        ast.ImportFrom(names=b, level=self.extract_import_level(a), LOCATIONS)
-        if self.py_version >= (3, 9) else
         ast.ImportFrom(module=None, names=b, level=self.extract_import_level(a), LOCATIONS)
      }
 import_from_targets[List[ast.alias]]:
@@ -605,7 +604,7 @@ decorator:
      }
 dec_maybe_call:
     | dn=dec_primary '(' z=[arguments] ')' {
-        ast.Call(func=dn, args=z[0] if z else [], keywords=z[1] if z else [], LOCATIONS)
+        ast.Call(func=dn, args=z[0] if z and z[0] else None, keywords=z[1] if z and z[1] else None, LOCATIONS)
      }
     | dec_primary
 dec_primary:
@@ -624,10 +623,10 @@ class_def_raw[ast.ClassDef]:
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] &&':' c=block {
         ast.ClassDef(
             a.value,
-            bases=b[0] if b else [],
-            keywords=b[1] if b else [],
+            bases=b[0] if b else None,
+            keywords=b[1] if b else None,
             body=c,
-            decorator_list=[],
+            decorator_list=None,
             LOCATIONS,
         )
      }
@@ -637,7 +636,7 @@ class_def_raw[ast.ClassDef]:
 
 function_def[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     | d=decorators f=function_def_raw { self.set_decorators(f, d) }
-    | f=function_def_raw {self.set_decorators(f, [])}
+    | f=function_def_raw {self.set_decorators(f, None)}
 
 function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     | invalid_def_raw
@@ -647,7 +646,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
             args=params or self.make_arguments(None, [], None, [], None),
             returns=a,
             body=b,
-            decorator_list=[],
+            decorator_list=None,
             type_comment=tc,
             LOCATIONS,
         )
@@ -661,7 +660,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
                 args=params or self.make_arguments(None, [], None, [], None),
                 returns=a,
                 body=b,
-                decorator_list=[],
+                decorator_list=None,
                 type_comment=tc,
                 LOCATIONS,
             )
@@ -746,12 +745,12 @@ default: '=' a=expression { a }
 
 if_stmt[ast.If]:
     | invalid_if_stmt
-    | 'if' a=named_expression ':' b=block c=elif_stmt { ast.If(test=a, body=b, orelse=c or [], LOCATIONS) }
-    | 'if' a=named_expression ':' b=block c=[else_block] { ast.If(test=a, body=b, orelse=c or [], LOCATIONS) }
+    | 'if' a=named_expression ':' b=block c=elif_stmt { ast.If(test=a, body=b, orelse=c, LOCATIONS) }
+    | 'if' a=named_expression ':' b=block c=[else_block] { ast.If(test=a, body=b, orelse=c, LOCATIONS) }
 elif_stmt[List[ast.If]]:
     | invalid_elif_stmt
     | 'elif' a=named_expression ':' b=block c=elif_stmt { [ast.If(test=a, body=b, orelse=c, LOCATIONS)] }
-    | 'elif' a=named_expression ':' b=block c=[else_block] { [ast.If(test=a, body=b, orelse=c or [], LOCATIONS)] }
+    | 'elif' a=named_expression ':' b=block c=[else_block] { [ast.If(test=a, body=b, orelse=c, LOCATIONS)] }
 else_block[list]:
     | invalid_else_stmt
     | 'else' &&':' b=block { b }
@@ -762,7 +761,7 @@ else_block[list]:
 while_stmt[ast.While]:
     | invalid_while_stmt
     | 'while' a=named_expression ':' b=block c=[else_block] {
-        ast.While(test=a, body=b, orelse=c or [], LOCATIONS)
+        ast.While(test=a, body=b, orelse=c, LOCATIONS)
      }
 
 # For statement
@@ -771,12 +770,12 @@ while_stmt[ast.While]:
 for_stmt[Union[ast.For, ast.AsyncFor]]:
     | invalid_for_stmt
     | 'for' t=star_targets 'in' ~ ex=star_expressions &&':' tc=[TYPE_COMMENT] b=block el=[else_block] {
-        ast.For(target=t, iter=ex, body=b, orelse=el or [], type_comment=tc, LOCATIONS) }
+        ast.For(target=t, iter=ex, body=b, orelse=el, type_comment=tc, LOCATIONS) }
     | 'async' 'for' t=star_targets 'in' ~ ex=star_expressions ':' tc=[TYPE_COMMENT] b=block el=[else_block] {
         self.check_version(
             (3, 5),
             "Async for loops are",
-            ast.AsyncFor(target=t, iter=ex, body=b, orelse=el or [], type_comment=tc, LOCATIONS)) }
+            ast.AsyncFor(target=t, iter=ex, body=b, orelse=el, type_comment=tc, LOCATIONS)) }
     | invalid_for_target
 
 # With statement
@@ -823,10 +822,10 @@ with_item[ast.withitem]:
 try_stmt[ast.Try]:
     | invalid_try_stmt
     | 'try' &&':' b=block f=finally_block {
-        ast.Try(body=b, handlers=[], orelse=[], finalbody=f, LOCATIONS)
+        ast.Try(body=b, handlers=None, orelse=None, finalbody=f, LOCATIONS)
      }
     | 'try' &&':' b=block ex=except_block+ el=[else_block] f=[finally_block] {
-        ast.Try(body=b, handlers=ex, orelse=el or [], finalbody=f or [], LOCATIONS)
+        ast.Try(body=b, handlers=ex, orelse=el, finalbody=f, LOCATIONS)
      }
 
 # Except statement
@@ -917,9 +916,9 @@ literal_expr:
     | signed_number !('+' | '-')
     | complex_number
     | strings
-    | 'None' { ast.Constant(value=None, LOCATIONS) }
-    | 'True' { ast.Constant(value=True, LOCATIONS) }
-    | 'False' { ast.Constant(value=False, LOCATIONS) }
+    | 'None' { ast.Constant(value=self.space.w_None, LOCATIONS) }
+    | 'True' { ast.Constant(value=self.space.w_True, LOCATIONS) }
+    | 'False' { ast.Constant(value=self.space.w_False, LOCATIONS) }
 
 complex_number:
     | real=signed_real_number '+' imag=imaginary_number {
@@ -982,8 +981,8 @@ group_pattern:
     | '(' pattern=pattern ')' { pattern }
 
 sequence_pattern["ast.MatchSequence"]:
-    | '[' patterns=maybe_sequence_pattern? ']' { ast.MatchSequence(patterns=patterns or [], LOCATIONS) }
-    | '(' patterns=open_sequence_pattern? ')' { ast.MatchSequence(patterns=patterns or [], LOCATIONS) }
+    | '[' patterns=maybe_sequence_pattern? ']' { ast.MatchSequence(patterns=patterns, LOCATIONS) }
+    | '(' patterns=open_sequence_pattern? ')' { ast.MatchSequence(patterns=patterns, LOCATIONS) }
 
 open_sequence_pattern:
     | pattern=maybe_star_pattern ',' patterns=maybe_sequence_pattern? {
@@ -1002,9 +1001,9 @@ star_pattern:
     | '*' wildcard_pattern { ast.MatchStar(target=None, LOCATIONS) }
 
 mapping_pattern:
-    | '{' '}' { ast.MatchMapping(keys=[], patterns=[], rest=None, LOCATIONS) }
+    | '{' '}' { ast.MatchMapping(keys=None, patterns=None, rest=None, LOCATIONS) }
     | '{' rest=double_star_pattern ','? '}' {
-        ast.MatchMapping(keys=[], patterns=[], rest=rest, LOCATIONS) }
+        ast.MatchMapping(keys=None, patterns=None, rest=rest, LOCATIONS) }
     | '{' items=items_pattern ',' rest=double_star_pattern ','? '}' {
         ast.MatchMapping(
             keys=[k for k,_ in items],
@@ -1033,15 +1032,15 @@ double_star_pattern:
 
 class_pattern["ast.MatchClass"]:
     | cls=name_or_attr '(' ')' {
-        ast.MatchClass(cls=cls, patterns=[], kwd_attrs=[], kwd_patterns=[], LOCATIONS)
+        ast.MatchClass(cls=cls, patterns=None, kwd_attrs=None, kwd_patterns=None, LOCATIONS)
      }
     | cls=name_or_attr '(' patterns=positional_patterns ','? ')' {
-        ast.MatchClass(cls=cls, patterns=patterns, kwd_attrs=[], kwd_patterns=[], LOCATIONS)
+        ast.MatchClass(cls=cls, patterns=patterns, kwd_attrs=None, kwd_patterns=None, LOCATIONS)
      }
     | cls=name_or_attr '(' keywords=keyword_patterns ','? ')' {
         ast.MatchClass(
             cls=cls,
-            patterns=[],
+            patterns=None,
             kwd_attrs=[k for k, _ in keywords],
             kwd_patterns=[p for _, p in keywords],
             LOCATIONS,
@@ -1167,7 +1166,7 @@ eq_bitwise_or: '==' a=bitwise_or { (ast.Eq, a) }
 # Do not support the Barry as BDFL <> for not eq
 noteq_bitwise_or[tuple]:
     | '!=' a=bitwise_or { (ast.NotEq, a) }
-lte_bitwise_or: '<=' a=bitwise_or { (ast.LtE(), a) }
+lte_bitwise_or: '<=' a=bitwise_or { (ast.LtE, a) }
 lt_bitwise_or: '<' a=bitwise_or { (ast.Lt, a) }
 gte_bitwise_or: '>=' a=bitwise_or { (ast.GtE, a) }
 gt_bitwise_or: '>' a=bitwise_or { (ast.Gt, a) }
@@ -1221,7 +1220,7 @@ factor (memo):
     | power
 
 power:
-    | a=await_primary '**' b=factor { ast.BinOp(left=a, op=ast.Pow(), right=b, LOCATIONS) }
+    | a=await_primary '**' b=factor { ast.BinOp(left=a, op=ast.Pow, right=b, LOCATIONS) }
     | await_primary
 
 # Primary elements
@@ -1235,12 +1234,12 @@ await_primary (memo):
 
 primary:
     | a=primary '.' b=NAME { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
-    | a=primary b=genexp { ast.Call(func=a, args=[b], keywords=[], LOCATIONS) }
+    | a=primary b=genexp { ast.Call(func=a, args=[b], keywords=None, LOCATIONS) }
     | a=primary '(' b=[arguments] ')' {
         ast.Call(
             func=a,
-            args=b[0] if b else [],
-            keywords=b[1] if b else [],
+            args=b[0] if b and b[0] else None,
+            keywords=b[1] if b and b[1] else None,
             LOCATIONS,
         )
      }
@@ -1294,7 +1293,7 @@ atom:
     | &'[' (list | listcomp)
     | &'{' (dict | set | dictcomp | setcomp)
     | '...' {
-        ast.Constant(value=Ellipsis, kind=None, LOCATIONS)
+        ast.Constant(value=self.space.w_Ellipsis, kind=None, LOCATIONS)
      }
 
 group:
@@ -1362,8 +1361,6 @@ lambda_param_maybe_default[Tuple[ast.arg, Any]]:
     | a=lambda_param c=default? ',' { (a, c) }
     | a=lambda_param c=default? &':' { (a, c) }
 lambda_param[ast.arg]: a=NAME {
-    ast.arg(arg=a.value, annotation=None, LOCATIONS)
-    if self.py_version >= (3, 9) else
     ast.arg(arg=a.value, annotation=None, type_comment=None, LOCATIONS)
 }
 
@@ -1373,11 +1370,11 @@ lambda_param[ast.arg]: a=NAME {
 strings[ast.Str] (memo): a=STRING+ { self.generate_ast_for_string(a) }
 
 list[ast.List]:
-    | '[' a=[star_named_expressions] ']' { ast.List(elts=a or [], ctx=Load, LOCATIONS) }
+    | '[' a=[star_named_expressions] ']' { ast.List(elts=a, ctx=Load, LOCATIONS) }
 
 tuple[ast.Tuple]:
     | '(' a=[y=star_named_expression ',' z=[star_named_expressions] { [y] + (z or []) } ] ')' {
-        ast.Tuple(elts=a or [], ctx=Load, LOCATIONS)
+        ast.Tuple(elts=a, ctx=Load, LOCATIONS)
      }
 
 set[ast.Set]: '{' a=star_named_expressions '}' { ast.Set(elts=a, LOCATIONS) }
@@ -1387,7 +1384,7 @@ set[ast.Set]: '{' a=star_named_expressions '}' { ast.Set(elts=a, LOCATIONS) }
 
 dict[ast.Dict]:
     | '{' a=[double_starred_kvpairs] '}' {
-        ast.Dict(keys=[kv[0] for kv in (a or [])], values=[kv[1] for kv in (a or [])], LOCATIONS)
+        ast.Dict(keys=[kv[0] for kv in a] if a else None, values=[kv[1] for kv in a] if a else None, LOCATIONS)
      }
     | '{' invalid_double_starred_kvpairs '}'
 
@@ -1410,11 +1407,11 @@ for_if_clause[ast.comprehension]:
         self.check_version(
             (3, 6),
             "Async comprehensions are",
-            ast.comprehension(target=a, iter=b, ifs=c, is_async=1)
+            ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=1)
         )
      }
     | 'for' a=star_targets 'in' ~ b=disjunction c=('if' z=disjunction { z })* {
-       ast.comprehension(target=a, iter=b, ifs=c, is_async=0) }
+       ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=0) }
     | invalid_for_target
 
 listcomp[ast.ListComp]:
@@ -1520,12 +1517,12 @@ single_subscript_attribute_target:
 t_primary:
     | a=t_primary '.' b=NAME &t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
     | a=t_primary '[' b=slices ']' &t_lookahead { ast.Subscript(value=a, slice=b, ctx=Load, LOCATIONS) }
-    | a=t_primary b=genexp &t_lookahead { ast.Call(func=a, args=[b], keywords=[], LOCATIONS) }
+    | a=t_primary b=genexp &t_lookahead { ast.Call(func=a, args=[b], keywords=None, LOCATIONS) }
     | a=t_primary '(' b=[arguments] ')' &t_lookahead {
         ast.Call(
             func=a,
-            args=b[0] if b else [],
-            keywords=b[1] if b else [],
+            args=b[0] if b else None,
+            keywords=b[1] if b else None,
             LOCATIONS,
         )
      }
