@@ -1,3 +1,10 @@
+# PyPy hacks for pegen
+
+this branch of this fork is for exploring using pegen in pypy.
+
+
+# Original README
+
 <p align="center">
 <img src="https://github.com/we-like-parsers/pegen/raw/main/media/logo.svg" width="70%">
 </p>
