@@ -274,6 +274,8 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 self.print("@logger")
         elif node.memo:
             self.print("@memoize")
+        else:
+            self.print("@logger")
         node_type = node.type or "Any"
         self.print(f"def {node.name}(self): # type Optional[{node_type}]")
         with self.indent():
@@ -321,6 +323,11 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
             return f"{name} = {call}", name
 
     def visit_Alt(self, node: Alt, is_loop: bool, is_gather: bool) -> None:
+        invalid = False
+        if len(node.items) == 1 and str(node.items[0]).startswith('invalid_'):
+            self.print("if self.call_invalid_rules:")
+            self.level += 1
+            invalid = True
         has_cut = any(isinstance(item.item, Cut) for item in node.items)
         with self.local_variable_context():
             if has_cut:
@@ -391,3 +398,6 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
             # Skip remaining alternatives if a cut was reached.
             if has_cut:
                 self.print("if cut: return None")
+
+        if invalid:
+            self.level -= 1

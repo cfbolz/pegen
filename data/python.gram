@@ -12,6 +12,7 @@ from pypy.interpreter.astcompiler.astbuilder import parse_number
 
 from pypy.interpreter.pyparser.pygram import tokens
 from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
+from pypy.interpreter.pyparser.error import SyntaxError
 
 # Singleton ast nodes, created once for efficiency
 Load = ast.Load
@@ -47,8 +48,8 @@ EXPR_NAME_MAPPING = {
 }
 
 
-
-
+def shorttok(tok):
+    return "%-25.25s" % ("%s.%s: %s:%r" % (tok.lineno, tok.column, tok.token_type, tok.value))
 
 def logger(method):
     """For non-memoized functions that we want to be logged.
@@ -62,11 +63,11 @@ def logger(method):
             return method(self, *args)
         argsr = ",".join(repr(arg) for arg in args)
         fill = "  " * self._level
-        print "{fill}{method_name}({argsr}) .... (looking at {self.showpeek()})"
+        print "%s%s(%s) .... (looking at %s)" % (fill, method_name, argsr, self.showpeek())
         self._level += 1
         tree = method(self, *args)
         self._level -= 1
-        print "{fill}... {method_name}({argsr}) --> {tree!s:.200}"
+        print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
         return tree
 
     logger_wrapper.__wrapped__ = method  # type: ignore
@@ -91,18 +92,18 @@ def memoize(method):
         fill = "  " * self._level
         if key not in self._cache:
             if verbose:
-                print "{fill}{method_name}({argsr}) ... (looking at {self.showpeek()})"
+                print "%s%s(%s) .... (looking at %s)" % (fill, method_name, argsr, self.showpeek())
             self._level += 1
             tree = method(self, *args)
             self._level -= 1
             if verbose:
-                print "{fill}... {method_name}({argsr}) -> {tree!s:.200}"
+                print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
             endmark = self._mark()
             self._cache[key] = tree, endmark
         else:
             tree, endmark = self._cache[key]
             if verbose:
-                print "{fill}{method_name}({argsr}) -> {tree!s:.200}"
+                print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
             self._reset(endmark)
         return tree
 
@@ -127,7 +128,7 @@ def memoize_left_rec(method):
         fill = "  " * self._level
         if key not in self._cache:
             if verbose:
-                print "{fill}{method_name} ... (looking at {self.showpeek()})"
+                print "%s%s .... (looking at %s)" % (fill, method_name, self.showpeek())
             self._level += 1
 
             # For left-recursive rules we manipulate the cache and
@@ -143,7 +144,7 @@ def memoize_left_rec(method):
             lastresult, lastmark = None, mark
             depth = 0
             if verbose:
-                print "{fill}Recursive {method_name} at {mark} depth {depth}"
+                print "%sRecursive %s at %s depth %s" % (fill, method_name, mark, depth)
 
             while True:
                 self._reset(mark)
@@ -155,14 +156,14 @@ def memoize_left_rec(method):
                 endmark = self._mark()
                 depth += 1
                 if verbose:
-                    print "{fill}Recursive {method_name} at {mark} depth {depth}: {result!s:.200} to {endmark}"
+                    print "%sRecursive %s at %s depth %s: %.200s to %s" % (fill, method_name, mark, depth, result, endmark)
                 if not result:
                     if verbose:
-                        print "{fill}Fail with {lastresult!s:.200} to {lastmark}"
+                        print "%sFail with %.200s to %s" % (fill, lastresult, lastmark)
                     break
                 if endmark <= lastmark:
                     if verbose:
-                        print "{fill}Bailing with {lastresult!s:.200} to {lastmark}"
+                        print "%sBailing with %.200s to %s" % (fill, lastresult, lastmark)
                     break
                 self._cache[key] = lastresult, lastmark = result, endmark
 
@@ -171,7 +172,7 @@ def memoize_left_rec(method):
 
             self._level -= 1
             if verbose:
-                print "{fill}{method_name}() -> {tree!s:.200} [cached]"
+                print "%s... %s() --> %s [cached]" % (fill, method_name, tree)
             if tree:
                 endmark = self._mark()
             else:
@@ -181,7 +182,7 @@ def memoize_left_rec(method):
         else:
             tree, endmark = self._cache[key]
             if verbose:
-                print "{fill}{method_name}() -> {tree!s:.200} [fresh]"
+                print "%s... %s() --> %s [fresh]" % (fill, method_name, tree)
             if tree:
                 self._reset(endmark)
         return tree
@@ -217,14 +218,26 @@ class Parser:
             if not self._path:
                 self._lines[tok.lineno] = tok.line
         self._index = 0
-        self._verbose = verbose
+        self._highwatermark = 0
 
         # parser stuff
-        self._verbose = verbose
+        self._verbose = True
         self._level = 0
         self._cache = {}
         # Integer tracking wether we are in a left recursive rule or not. Can be useful
         # for error reporting.
+        self.in_recursive_rule = 0
+
+        self.call_invalid_rules = False
+
+
+    def reset(self):
+        self._index = 0
+        self._highwatermark = 0
+
+        self._verbose = True
+        self._level = 0
+        self._cache = {}
         self.in_recursive_rule = 0
 
 
@@ -238,6 +251,7 @@ class Parser:
         cached = not self._index == len(self._tokens)
         tok = self.peek()
         self._index += 1
+        self._highwatermark = max(self._highwatermark, self._index)
         if self._verbose:
             self.report(cached, False)
         return tok
@@ -248,9 +262,7 @@ class Parser:
         return self._tokens[self._index]
 
     def diagnose(self):
-        if not self._tokens:
-            self.getnext()
-        return self._tokens[-1]
+        return self._tokens[self._highwatermark]
 
     def get_last_non_whitespace_token(self):
         for tok in reversed(self._tokens[: self._index]):
@@ -297,10 +309,10 @@ class Parser:
         else:
             fill = "-" * self._index + "*"
         if self._index == 0:
-            print("{fill} (Bof)")
+            print("%s (Bof)" % fill)
         else:
             tok = self._tokens[self._index - 1]
-            print("{fill} {shorttok(tok)}")
+            print "%s %s" % (fill, shorttok(tok))
     # parser methods
 
     def start(self):
@@ -308,7 +320,7 @@ class Parser:
 
     def showpeek(self):
         tok = self.peek()
-        return "{tok.start[0]}.{tok.start[1]}: {token.tok_name[tok.token_type]}:{tok.value!r}"
+        return shorttok(tok)
 
     def name(self):
         tok = self.peek()
@@ -367,7 +379,7 @@ class Parser:
 
     def expect_forced(self, res, expectation):
         if res is None:
-            raise self.make_syntax_error("expected {expectation}")
+            self.raise_syntax_error("expected {expectation}")
         return res
 
     def positive_lookahead(self, func, *args):
@@ -382,11 +394,8 @@ class Parser:
         self._reset(mark)
         return not ok
 
-    def make_syntax_error(self, message, filename):
-        tok = self.diagnose()
-        return SyntaxError(message, (filename, tok.start[0], 1 + tok.start[1], tok.line))
-
 BaseParser = Parser
+
 
 class Parser(Parser):
 
@@ -402,21 +411,10 @@ class Parser(Parser):
         BaseParser.__init__(self, tokenizer, verbose=verbose)
         self.filename = filename
         self.py_version = (3, 9)
-        self._exception = None
         if space is None:
             from pypy.tool.pytest.objspace import gettestobjspace
             space = gettestobjspace()
         self.space = space
-
-    def parse(self, rule):
-        res = getattr(self, rule)()
-        if res is None:
-            if self._exception is not None:
-                raise self._exception
-            else:
-                raise SyntaxError("invalid syntax")
-
-        return res
 
     def check_version(self, min_version, error_msg, node):
         """Check that the python version is high enough for a rule to apply.
@@ -425,9 +423,9 @@ class Parser(Parser):
         if self.py_version >= min_version:
             return node
         else:
-            raise SyntaxError(
-                "%s is only supported in Python %s and above." % (error_msg, min_version)
-            )
+            self.raise_syntax_error_known_location(
+                "%s is only supported in Python %s and above." % (error_msg, min_version),
+                node)
 
     def raise_indentation_error(self, msg):
         """Raise an indentation error."""
@@ -461,13 +459,13 @@ class Parser(Parser):
     def ensure_real(self, number_str):
         number = ast.literal_eval(number_str)
         if number is not complex:
-            self.store_syntax_error("real number required in complex literal")
+            self.raise_syntax_error("real number required in complex literal")
         return number
 
     def ensure_imaginary(self, number_str):
         number = ast.literal_eval(number_str)
         if number is not complex:
-            self.store_syntax_error("imaginary  number required in complex literal")
+            self.raise_syntax_error("imaginary  number required in complex literal")
         return number
 
     def generate_ast_for_string(self, tokens):
@@ -491,41 +489,6 @@ class Parser(Parser):
 
             space = self.space
         return string_parse_literal(FakeASTBuilder(), Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
-            
-        err_msg = ''
-        line = 1
-        col_offset = 0
-        source = ''
-        for t in tokens:
-            n_line = t.lineno - line
-            if n_line:
-                col_offset = 0
-            source += """\n""" * n_line + ' ' * (t.column - col_offset) + t.value
-            line, col_offset = t.end_lineno, t.end_column
-        if source[0] == ' ':
-            source = '(' + source[1:]
-        else:
-            source = '(' + source
-        source += ')'
-        try:
-            m = ast.parse(source)
-        except SyntaxError as e:
-            err_msg = e.args[0]
-            # Identify the line at which the error occurred to get a more
-            # accurate line number
-            for t in tokens:
-                try:
-                    m = ast.parse(t.value)
-                except SyntaxError:
-                    break
-
-        # Avoid getting a triple nesting in the error report that does not
-        # bring anything relevant to the traceback.
-        if err_msg:
-            self.store_syntax_error_known_location(err_msg, t)
-            raise self._exception
-
-        return m.body[0].value
 
     def extract_import_level(self, tokens):
         """Extract the relative import level from the tokens preceding the module name.
@@ -599,13 +562,12 @@ class Parser(Parser):
             kwarg=after_star[2]
         )
 
-    def _store_syntax_error(
+    def _raise_syntax_error(
         self,
         message,
-        start,
-        end,
+        start=None,
+        end=None,
     ):
-        from pypy.interpreter.pyparser.error import SyntaxError
         line_from_token = start is None and end is None
         if start is None or end is None:
             tok = self.diagnose()
@@ -620,30 +582,15 @@ class Parser(Parser):
                 self.get_lines(list(range(start[0], end[0] + 1)))
             )
 
-        self._exception = SyntaxError(
+        raise SyntaxError(
             message,
             start[0], start[1], line + "\\n", self.filename, lastlineno=end[0]
         )
 
-    def store_syntax_error(self, message):
-        self._store_syntax_error(message)
+    def raise_syntax_error(self, message):
+        self._raise_syntax_error(message)
 
-    def make_syntax_error(self, message):
-        self._store_syntax_error(message, None, None)
-        return self._exception
-
-    def store_syntax_error_known_location(self, message, node):
-        """Store a syntax error that occured at a given AST node."""
-        if not isinstance(node, ast.AST):
-            start = node.lineno, node.column
-            end = node.end_lineno, node.end_column
-        else:
-            start = node.lineno, node.col_offset
-            end = node.end_lineno, node.end_col_offset
-
-        self._store_syntax_error(message, start, end)
-
-    def store_syntax_error_known_range(
+    def raise_syntax_error_known_range(
         self,
         message,
         start_node,
@@ -659,9 +606,9 @@ class Parser(Parser):
         else:
             end = end_node.end_lineno, end_node.end_col_offset
 
-        self._store_syntax_error(message, start, end)
+        self._raise_syntax_error(message, start, end)
 
-    def store_syntax_error_starting_from(
+    def raise_syntax_error_starting_from(
         self,
         message,
         start_node,
@@ -671,11 +618,10 @@ class Parser(Parser):
         else:
             start = start_node.lineno, start_node.col_offset
 
-        self._store_syntax_error(message, start, None)
+        self._raise_syntax_error(message, start, None)
 
     def raise_syntax_error(self, message):
-        self._store_syntax_error(message, None, None)
-        raise self._exception
+        self._raise_syntax_error(message, None, None)
 
     def raise_syntax_error_known_location(
             self,
@@ -683,25 +629,13 @@ class Parser(Parser):
             node,
         ):
         """Raise a syntax error that occured at a given AST node."""
-        self.store_syntax_error_known_location(message, node)
-        raise self._exception
-
-    def raise_syntax_error_known_range(
-        self,
-        message,
-        start_node,
-        end_node,
-    ):
-        self.store_syntax_error_known_range(message, start_node, end_node)
-        raise self._exception
-
-    def raise_syntax_error_starting_from(
-        self,
-        message,
-        start_node,
-    ):
-        self.store_syntax_error_starting_from(message, start_node)
-        raise self._exception
+        if not isinstance(node, ast.AST):
+            start = node.lineno, node.column
+            end = node.end_lineno, node.end_column
+        else:
+            start = node.lineno, node.col_offset
+            end = node.end_lineno, node.end_col_offset
+        self._raise_syntax_error(message, start, end)
 
 '''
 
@@ -1870,36 +1804,36 @@ func_type_comment:
 # From here on, there are rules for invalid syntax with specialised error messages
 invalid_arguments[NoReturn]:
     | a=args ',' '*' {
-        self.store_syntax_error_known_location(
+        self.raise_syntax_error_known_location(
             "iterable argument unpacking follows keyword argument unpacking",
             a[1][-1] if a[1] else a[0][-1],
         )
      }
     | a=expression b=for_if_clauses ',' [args | expression for_if_clauses] {
-        self.store_syntax_error_known_range(
+        self.raise_syntax_error_known_range(
             "Generator expression must be parenthesized", a, b[-1].target
         )
      }
     | a=NAME b='=' expression for_if_clauses {
-        self.store_syntax_error_known_range(
+        self.raise_syntax_error_known_range(
             "invalid syntax. Maybe you meant '==' or ':=' instead of '='?", a, b
         )
      }
     | a=args for_if_clauses {
-        self.store_syntax_error_starting_from(
+        self.raise_syntax_error_starting_from(
             "Generator expression must be parenthesized",
             a[1][-1] if a[1] else a[0][-1]
         )
      }
     | args ',' a=expression b=for_if_clauses {
-        self.store_syntax_error_known_range(
+        self.raise_syntax_error_known_range(
             "Generator expression must be parenthesized",
             a,
             b[-1].target,
         )
      }
     | a=args ',' args {
-        self.store_syntax_error(
+        self.raise_syntax_error(
             "positional argument follows keyword argument unpacking"
             if a[1][-1].arg is None else
             "positional argument follows keyword argument",
@@ -1907,12 +1841,12 @@ invalid_arguments[NoReturn]:
      }
 invalid_kwarg[NoReturn]:
     | a=NAME b='=' expression for_if_clauses {
-        self.store_syntax_error_known_range(
+        self.raise_syntax_error_known_range(
             "invalid syntax. Maybe you meant '==' or ':=' instead of '='?", a, b
         )
      }
     | !(NAME '=') a=expression b='=' {
-        self.store_syntax_error_known_range(
+        self.raise_syntax_error_known_range(
             "expression cannot contain assignment, perhaps you meant \"==\"?", a, b,
         )
      }
@@ -1933,14 +1867,14 @@ invalid_expression[NoReturn]:
     # !(NAME STRING) is not matched so we don't show this error with some invalid string prefixes like: kf"dsfsdf"
     # Soft keywords need to also be ignored because they can be parsed as NAME NAME
     | !(NAME STRING | SOFT_KEYWORD) a=disjunction b=expression_without_invalid {
-        self.store_syntax_error_known_range("invalid syntax. Perhaps you forgot a comma?", a, b)
+        self.raise_syntax_error_known_range("invalid syntax. Perhaps you forgot a comma?", a, b)
      }
     | a=disjunction 'if' b=disjunction !('else'|':') {
-        self.store_syntax_error_known_range("expected 'else' after 'if' expression", a, b)
+        self.raise_syntax_error_known_range("expected 'else' after 'if' expression", a, b)
      }
 invalid_named_expression[NoReturn]:
     | a=expression ':=' expression {
-        self.store_syntax_error_known_location(
+        self.raise_syntax_error_known_location(
             "cannot use assignment expressions with %s" % (self.get_expr_name(a), ), a
         )
      }
@@ -1949,7 +1883,7 @@ invalid_named_expression[NoReturn]:
         (
             None
             if self.in_recursive_rule else
-            self.store_syntax_error_known_range(
+            self.raise_syntax_error_known_range(
                 "invalid syntax. Maybe you meant '==' or ':=' instead of '='?", a, b
             )
         )
@@ -1958,7 +1892,7 @@ invalid_named_expression[NoReturn]:
         (
             None
             if self.in_recursive_rule else
-            self.store_syntax_error_known_range(
+            self.raise_syntax_error_known_range(
                 "cannot assign to %s here. Maybe you meant '==' instead of '='?" % (self.get_expr_name(a), ), a, b
             )
         )
@@ -1966,22 +1900,22 @@ invalid_named_expression[NoReturn]:
 
 invalid_assignment[NoReturn]:
     | a=invalid_ann_assign_target ':' expression {
-        self.store_syntax_error_known_location(
+        self.raise_syntax_error_known_location(
             "only single target (not {self.get_expr_name(a)}) can be annotated", a
         )
      }
     | a=star_named_expression ',' star_named_expressions* ':' expression {
-        self.store_syntax_error_known_location("only single target (not tuple) can be annotated", a) }
+        self.raise_syntax_error_known_location("only single target (not tuple) can be annotated", a) }
     | a=expression ':' expression {
-        self.store_syntax_error_known_location("illegal target for annotation", a) }
+        self.raise_syntax_error_known_location("illegal target for annotation", a) }
     | (star_targets '=')* a=star_expressions '=' {
-        self.store_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
      }
     | (star_targets '=')* a=yield_expr '=' {
-        self.store_syntax_error_known_location("assignment to yield expression not possible", a)
+        self.raise_syntax_error_known_location("assignment to yield expression not possible", a)
      }
     | a=star_expressions augassign (yield_expr | star_expressions) {
-        self.store_syntax_error_known_location(
+        self.raise_syntax_error_known_location(
             "{self.get_expr_name(a)} is an illegal expression for augmented assignment", a
         )
      }
@@ -2029,9 +1963,9 @@ invalid_lambda_parameters_helper[NoReturn]:
     | a=lambda_param_with_default+
 invalid_star_etc[NoReturn]:
     | a='*' (')' | ',' (')' | '**')) {
-        self.store_syntax_error_known_location("named arguments must follow bare *", a)
+        self.raise_syntax_error_known_location("named arguments must follow bare *", a)
      }
-    | '*' ',' TYPE_COMMENT { self.store_syntax_error("bare * has associated type comment") }
+    | '*' ',' TYPE_COMMENT { self.raise_syntax_error("bare * has associated type comment") }
 invalid_lambda_star_etc[NoReturn]:
     | '*' (':' | ',' (':' | '**')) {
         self.raise_syntax_error("named arguments must follow bare *")
@@ -2090,8 +2024,8 @@ invalid_except_stmt[None]:
     | 'except' a=expression ',' expressions ['as' NAME ] ':' {
         self.raise_syntax_error_starting_from("exception group must be parenthesized", a)
      }
-    | a='except' expression ['as' NAME ] NEWLINE { self.store_syntax_error("expected ':'") }
-    | a='except' NEWLINE { self.store_syntax_error("expected ':'") }
+    | a='except' expression ['as' NAME ] NEWLINE { self.raise_syntax_error("expected ':'") }
+    | a='except' NEWLINE { self.raise_syntax_error("expected ':'") }
 invalid_finally_stmt[NoReturn]:
     | a='finally' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
@@ -2127,7 +2061,7 @@ invalid_match_stmt[NoReturn]:
         )
      }
 invalid_case_block[NoReturn]:
-    | "case" patterns guard? !':' { self.store_syntax_error("expected ':'") }
+    | "case" patterns guard? !':' { self.raise_syntax_error("expected ':'") }
     | a="case" patterns guard? ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after 'case' statement on line {a.lineno}"
@@ -2169,7 +2103,7 @@ invalid_else_stmt[NoReturn]:
         )
      }
 invalid_while_stmt[NoReturn]:
-    | 'while' named_expression NEWLINE { self.store_syntax_error("expected ':'") }
+    | 'while' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='while' named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after 'while' statement on line {a.lineno}"
@@ -2197,22 +2131,22 @@ invalid_class_def_raw[NoReturn]:
 invalid_double_starred_kvpairs[None]:
     | ','.double_starred_kvpair+ ',' invalid_kvpair
     | expression ':' a='*' bitwise_or {
-        self.store_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
+        self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' &('}'|',') {
-        self.store_syntax_error_known_location("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location("expression expected after dictionary key and ':'", a)
      }
 invalid_kvpair[None]:
     | a=expression !(':') {
-        self._store_syntax_error(
+        self._raise_syntax_error(
             "':' expected after dictionary key",
             (a.lineno, a.col_offset - 1),
             (a.end_lineno, a.end_col_offset, -1)
         )
      }
     | expression ':' a='*' bitwise_or {
-        self.store_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
+        self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' {
-        self.store_syntax_error_known_location("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location("expression expected after dictionary key and ':'", a)
      }

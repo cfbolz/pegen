@@ -30,14 +30,17 @@ class TestAstBuilder:
         parser = PythonParser(tokengen, verbose=False)
         self.space = parser.space
         if p_mode == "eval":
-            res = parser.eval()
+            meth = parser.eval
         elif p_mode == "single":
-            res = parser.interactive()
+            meth = parser.interactive
         else:
-            res = parser.start()
+            meth = parser.start
+        res = meth()
         if res is None:
-            err = parser.make_syntax_error("<test>")
-            raise err
+            parser.reset()
+            parser.call_invalid_rules = True
+            meth() # often raises
+            parser.raise_syntax_error("invalid syntax")
         return res
 
     def get_first_expr(self, source, p_mode=None, flags=None):
@@ -82,10 +85,15 @@ class TestAstBuilder:
         mod = self.get_ast("def f():\n pass")
         assert mod
 
-    def test_error(self):
+    def test_specific_error(self):
         with pytest.raises(SyntaxError) as excinfo:
             self.get_ast("del lambda x: 1")
         assert excinfo.value.msg == "cannot delete lambda"
+
+    def test_generic_error(self):
+        with pytest.raises(SyntaxError) as excinfo:
+            self.get_ast("with = 1")
+        assert excinfo.value.msg == "invalid syntax"
 
     def test_del(self):
         d = self.get_first_stmt("del x")
