@@ -321,8 +321,16 @@ class Parser:
 
     def name(self):
         tok = self.peek()
-        if tok.token_type == tokens.NAME and tok.value not in self.KEYWORDS:
-            return self.getnext()
+        if tok.token_type == tokens.NAME:
+            self.getnext()
+            return ast.Name(
+                    id=self.new_identifier(tok.value),
+                    ctx=Load,
+                    lineno=tok.lineno,
+                    col_offset=tok.column,
+                    end_lineno=tok.end_lineno,
+                    end_col_offset=tok.end_column,
+                )
         return None
 
     def number(self):
@@ -421,17 +429,18 @@ class Parser:
             self.raise_syntax_error_known_location("cannot assign to %s" % (e.name,), e.node)
         return node
 
-    def check_for_forbidden_name(self, tok):
+    def check_for_forbidden_assignment_target(self, name):
         from pypy.interpreter.astcompiler import misc # Side effects
-        if tok is None:
+        if name is None:
             return None
-        name = tok.value
+        assert isinstance(name, ast.Name)
+        id = name.id
         try:
-            misc.check_forbidden_name(self.space, name)
+            misc.check_forbidden_name(self.space, id)
         except misc.ForbiddenNameAssignment as e:
             self.raise_syntax_error_known_location(
-                "cannot assign to %s" % (e.name,), tok)
-        return self.new_identifier(tok.value)
+                "cannot assign to %s" % (e.name,), name)
+        return id
 
     def check_repeated_keywords(self, args):
         if not args or not args[1]:
@@ -737,14 +746,7 @@ assignment:
             (3, 6),
             "Variable annotation syntax is",
             ast.AnnAssign(
-                target=ast.Name(
-                    id=a.value,
-                    ctx=Store,
-                    lineno=a.lineno,
-                    col_offset=a.column,
-                    end_lineno=a.end_lineno,
-                    end_col_offset=a.end_column,
-                ),
+                target=self.set_expr_context(a, Store),
                 annotation=b,
                 value=c,
                 simple=1,
@@ -798,11 +800,11 @@ raise_stmt[ast.Raise]:
     | 'raise' { ast.Raise(exc=None, cause=None, LOCATIONS) }
 
 global_stmt[ast.Global]: 'global' a=','.NAME+ {
-    ast.Global(names=[n.value for n in a], LOCATIONS)
+    ast.Global(names=[n.id for n in a], LOCATIONS)
 }
 
 nonlocal_stmt[ast.Nonlocal]: 'nonlocal' a=','.NAME+ {
-    ast.Nonlocal(names=[n.value for n in a], LOCATIONS)
+    ast.Nonlocal(names=[n.id for n in a], LOCATIONS)
 }
 
 del_stmt[ast.Delete]:
@@ -838,15 +840,15 @@ import_from_targets[List[ast.alias]]:
 import_from_as_names[List[ast.alias]]:
     | a=','.import_from_as_name+ { a }
 import_from_as_name[ast.alias]:
-    | a=NAME b=['as' z=NAME { z }] { ast.alias(name=self.check_for_forbidden_name(a), asname=self.check_for_forbidden_name(b)) }
+    | a=NAME b=['as' z=NAME { z }] { ast.alias(name=self.check_for_forbidden_assignment_target(a), asname=self.check_for_forbidden_assignment_target(b)) }
 dotted_as_names[List[ast.alias]]:
     | a=','.dotted_as_name+ { a }
 dotted_as_name[ast.alias]:
-    | a=dotted_name b=['as' z=NAME { z }] { ast.alias(name=a, asname=self.check_for_forbidden_name(b)) }
+    | a=dotted_name b=['as' z=NAME { z }] { ast.alias(name=a, asname=self.check_for_forbidden_assignment_target(b)) }
 dotted_name[str]:
-    | a=NAME ! '.' { self.check_for_forbidden_name(a) } # single name without following dots
-    | a=dotted_name '.' b=NAME { a + "." + b.value }
-    | a=NAME { a.value }
+    | a=NAME ! '.' { self.check_for_forbidden_assignment_target(a) } # single name without following dots
+    | a=dotted_name '.' b=NAME { a + "." + b.id }
+    | a=NAME { a.id }
 
 # COMPOUND STATEMENTS
 # ===================
@@ -871,8 +873,8 @@ dec_maybe_call:
      }
     | dec_primary
 dec_primary:
-    | a=dec_primary '.' b=NAME { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
-    | a=NAME { ast.Name(id=a.value, ctx=Load, LOCATIONS) }
+    | a=dec_primary '.' b=NAME { ast.Attribute(value=a, attr=b.id, ctx=Load, LOCATIONS) }
+    | a=NAME { a }
 
 # Class definitions
 # -----------------
@@ -885,7 +887,7 @@ class_def_raw[ast.ClassDef]:
     | invalid_class_def_raw
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] &&':' c=block {
         ast.ClassDef(
-            self.check_for_forbidden_name(a),
+            self.check_for_forbidden_assignment_target(a),
             bases=b[0] if b else None,
             keywords=b[1] if b else None,
             body=c,
@@ -905,7 +907,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     | invalid_def_raw
     | 'def' n=NAME '(' params=[params] ')' a=['->' z=expression { z }] &&':' tc=[func_type_comment] b=block {
         ast.FunctionDef(
-            name=self.check_for_forbidden_name(n),
+            name=self.check_for_forbidden_assignment_target(n),
             args=params or self.make_arguments(None, [], None, [], None),
             returns=a,
             body=b,
@@ -919,7 +921,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
             (3, 5),
             "Async functions are",
             ast.AsyncFunctionDef(
-                name=n.value,
+                name=self.check_for_forbidden_assignment_target(n),
                 args=params or self.make_arguments(None, [], None, [], None),
                 returns=a,
                 body=b,
@@ -999,7 +1001,7 @@ param_with_default[Tuple[ast.arg, Any]]:
 param_maybe_default[Tuple[ast.arg, Any]]:
     | a=param c=default? ',' tc=TYPE_COMMENT? { (self.set_arg_type_comment(a, tc), c) }
     | a=param c=default? tc=TYPE_COMMENT? &')' { (self.set_arg_type_comment(a, tc), c) }
-param: a=NAME b=annotation? { ast.arg(arg=self.check_for_forbidden_name(a), annotation=b, type_comment=None, LOCATIONS) }
+param: a=NAME b=annotation? { ast.arg(arg=self.check_for_forbidden_assignment_target(a), annotation=b, type_comment=None, LOCATIONS) }
 annotation: ':' a=expression { a }
 default: '=' a=expression { a }
 
@@ -1097,7 +1099,7 @@ try_stmt[ast.Try]:
 except_block[ast.ExceptHandler]:
     | invalid_except_stmt_indent
     | 'except' e=expression t=['as' z=NAME { z }] ':' b=block {
-        ast.ExceptHandler(type=e, name=self.check_for_forbidden_name(t), body=b, LOCATIONS) }
+        ast.ExceptHandler(type=e, name=self.check_for_forbidden_assignment_target(t), body=b, LOCATIONS) }
     | 'except' ':' b=block { ast.ExceptHandler(type=None, name=None, body=b, LOCATIONS) }
     | invalid_except_stmt
 finally_block[list]:
@@ -1223,7 +1225,7 @@ capture_pattern:
      }
 
 pattern_capture_target[str]:
-    | !"_" name=NAME !('.' | '(' | '=') { name.value }
+    | !"_" name=NAME !('.' | '(' | '=') { name.id }
 
 wildcard_pattern["ast.MatchAs"]:
     | "_" { ast.MatchAs(pattern=None, target=None, LOCATIONS) }
@@ -1233,12 +1235,12 @@ value_pattern["ast.MatchValue"]:
 
 attr[ast.Attribute]:
     | value=name_or_attr '.' attr=NAME {
-        ast.Attribute(value=value, attr=attr.value, ctx=Load, LOCATIONS)
+        ast.Attribute(value=value, attr=attr.id, ctx=Load, LOCATIONS)
      }
 
 name_or_attr:
     | attr
-    | name=NAME { ast.Name(id=name.value, ctx=Load, LOCATIONS) }
+    | NAME
 
 group_pattern:
     | '(' pattern=pattern ')' { pattern }
@@ -1327,7 +1329,7 @@ keyword_patterns:
     | ','.keyword_pattern+
 
 keyword_pattern:
-    | arg=NAME '=' value=pattern { (arg.value, value) }
+    | arg=NAME '=' value=pattern { (arg.id, value) }
 
 # EXPRESSIONS
 # -----------
@@ -1372,14 +1374,7 @@ assignment_expression:
             (3, 8),
             "The ':=' operator is",
             ast.NamedExpr(
-                target=ast.Name(
-                    id=a.value,
-                    ctx=Store,
-                    lineno=a.lineno,
-                    col_offset=a.column,
-                    end_lineno=a.end_lineno,
-                    end_col_offset=a.end_column
-                ),
+                target=self.set_expr_context(a, Store),
                 value=b,
                 LOCATIONS,
             )
@@ -1495,7 +1490,7 @@ await_primary (memo):
     | primary
 
 primary:
-    | a=primary '.' b=NAME { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
+    | a=primary '.' b=NAME { ast.Attribute(value=a, attr=b.id, ctx=Load, LOCATIONS) }
     | a=primary b=genexp { ast.Call(func=a, args=[b], keywords=None, LOCATIONS) }
     | a=primary '(' b=[arguments] ')' {
         ast.Call(
@@ -1537,7 +1532,7 @@ slice:
      }
 
 atom:
-    | a=NAME { ast.Name(id=a.value, ctx=Load, LOCATIONS) }
+    | NAME
     | 'True' {
         ast.Constant(value=self.space.w_True, kind=None, LOCATIONS)
      }
@@ -1623,7 +1618,7 @@ lambda_param_maybe_default[Tuple[ast.arg, Any]]:
     | a=lambda_param c=default? ',' { (a, c) }
     | a=lambda_param c=default? &':' { (a, c) }
 lambda_param[ast.arg]: a=NAME {
-    ast.arg(arg=self.check_for_forbidden_name(a), annotation=None, type_comment=None, LOCATIONS)
+    ast.arg(arg=self.check_for_forbidden_assignment_target(a), annotation=None, type_comment=None, LOCATIONS)
 }
 
 # LITERALS
@@ -1722,12 +1717,12 @@ starred_expression:
 
 kwarg_or_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_name(a), value=b, LOCATIONS) }
+    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_assignment_target(a), value=b, LOCATIONS) }
     | a=starred_expression { a }
 
 kwarg_or_double_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_name(a), value=b, LOCATIONS) }   # XXX Unreachable
+    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_assignment_target(a), value=b, LOCATIONS) }   # XXX Unreachable
     | '**' a=expression { ast.keyword(arg=None, value=a, LOCATIONS) }
 
 # ASSIGNMENT TARGETS
@@ -1756,28 +1751,28 @@ star_target (memo):
     | target_with_star_atom
 
 target_with_star_atom (memo):
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Store, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.id, ctx=Store, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Store, LOCATIONS) }
     | star_atom
 
 star_atom:
-    | a=NAME { self.set_expr_context(ast.Name(id=a.value, ctx=Store, LOCATIONS), Store) }
+    | a=NAME { self.set_expr_context(a, Store) }
     | '(' a=target_with_star_atom ')' { self.set_expr_context(a, Store) }
     | '(' a=[star_targets_tuple_seq] ')' { ast.Tuple(elts=a, ctx=Store, LOCATIONS) }
     | '[' a=[star_targets_list_seq] ']' {  ast.List(elts=a, ctx=Store, LOCATIONS) }
 
 single_target:
     | single_subscript_attribute_target
-    | a=NAME { ast.Name(id=a.value, ctx=Store, LOCATIONS) }
+    | a=NAME { self.set_expr_context(a, Store) }
     | '(' a=single_target ')' { a }
 
 single_subscript_attribute_target:
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Store, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.id, ctx=Store, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Store, LOCATIONS) }
 
 
 t_primary:
-    | a=t_primary '.' b=NAME &t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Load, LOCATIONS) }
+    | a=t_primary '.' b=NAME &t_lookahead { ast.Attribute(value=a, attr=b.id, ctx=Load, LOCATIONS) }
     | a=t_primary '[' b=slices ']' &t_lookahead { ast.Subscript(value=a, slice=b, ctx=Load, LOCATIONS) }
     | a=t_primary b=genexp &t_lookahead { ast.Call(func=a, args=[b], keywords=None, LOCATIONS) }
     | a=t_primary '(' b=[arguments] ')' &t_lookahead {
@@ -1798,12 +1793,12 @@ t_lookahead: '(' | '[' | '.'
 del_targets: a=','.del_target+ [','] { a }
 
 del_target (memo):
-    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.value, ctx=Del, LOCATIONS) }
+    | a=t_primary '.' b=NAME !t_lookahead { ast.Attribute(value=a, attr=b.id, ctx=Del, LOCATIONS) }
     | a=t_primary '[' b=slices ']' !t_lookahead { ast.Subscript(value=a, slice=b, ctx=Del, LOCATIONS) }
     | del_t_atom
 
 del_t_atom:
-    | a=NAME { ast.Name(id=a.value, ctx=Del, LOCATIONS) }
+    | a=NAME { self.set_expr_context(a, Del) }
     | '(' a=del_target ')' { self.set_expr_context(a, Del) }
     | '(' a=[del_targets] ')' { ast.Tuple(elts=a, ctx=Del, LOCATIONS) }
     | '[' a=[del_targets] ']' { ast.List(elts=a, ctx=Del, LOCATIONS) }
@@ -1888,8 +1883,8 @@ expression_without_invalid[ast.AST]:
 invalid_legacy_expression:
     | a=NAME !'(' b=expression_without_invalid {
         self.raise_syntax_error_known_range(
-            "Missing parentheses in call to '%s'. Did you mean '%s'(...)?" % (a.value, a.value), a, b,
-        ) if a.value in ("exec", "print") else
+            "Missing parentheses in call to '%s'. Did you mean '%s'(...)?" % (a.id, a.id), a, b,
+        ) if a.id in ("exec", "print") else
         None
      }
 invalid_expression[NoReturn]:
