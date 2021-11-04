@@ -196,6 +196,10 @@ class Parser:
                 and self._tokens[-1].token_type == tokens.NEWLINE
             ):
                 continue
+            if tok.token_type == tokens.NAME:
+                index = self.KEYWORD_INDICES.get(tok.value, -1)
+                if index != -1:
+                    tok.token_type = index
             self._tokens.append(tok)
             if not self._path and tok.line:
                 self._lines[tok.lineno] = tok.line
@@ -648,7 +652,6 @@ class Parser:
         return tok
 
     def kwarg_illegal_assignment(self, a, b):
-        import pdb; pdb.set_trace()
         space = self.space
         if isinstance(a, ast.Constant):
             if space.is_w(a.value, space.w_True):

@@ -89,6 +89,7 @@ class PythonCallMakerVisitor(GrammarVisitor):
         self.gen = parser_generator
         self.cache: Dict[Any, Any] = {}
         self.keywords: Set[str] = set()
+        self.keyword_indices = {}
         self.soft_keywords: Set[str] = set()
 
     def visit_NameLeaf(self, node: NameLeaf) -> Tuple[Optional[str], str]:
@@ -116,6 +117,9 @@ class PythonCallMakerVisitor(GrammarVisitor):
         call = f"self.expect({node.value})"
         if re.match(r"[a-zA-Z_]\w*\Z", val):  # This is a keyword
             if node.value.endswith("'"):
+                kw = node.value.strip("'")
+                index = self.keyword_indices.setdefault(kw, len(self.keyword_indices) + 499)
+                call = f"self.expect_type({index!r})"
                 self.keywords.add(val)
             else:
                 self.soft_keywords.add(val)
@@ -245,6 +249,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
 
         self.print()
         with self.indent():
+            self.print(f"KEYWORD_INDICES = {self.callmakervisitor.keyword_indices}")
             self.print(f"KEYWORDS = {tuple(sorted(self.callmakervisitor.keywords))}")
             self.print(f"SOFT_KEYWORDS = {tuple(sorted(self.callmakervisitor.soft_keywords))}")
 
