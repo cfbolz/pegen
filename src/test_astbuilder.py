@@ -1677,8 +1677,7 @@ class TestAstBuilder:
         node = self.get_first_typed_stmt(vardecl)
         assert eq_w(node.type_comment, w("int"))
 
-    def xtest_type_ignore(self): # XXX
-        eq_w, w = self.space.eq_w, self.space.wrap
+    def test_type_ignore(self):
         module = self.get_ast(textwrap.dedent("""\
         import x # type: ignore
         # type: ignore@abc
@@ -1699,6 +1698,7 @@ class TestAstBuilder:
             (8, '@def')
         ]
 
+        eq_w, w = self.space.eq_w, self.space.wrap
         assert all([
             eq_w(type_ignore.tag, w(expected[1]))
             and type_ignore.lineno == expected[0]
