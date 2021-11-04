@@ -20,6 +20,20 @@ Load = ast.Load
 Store = ast.Store
 Del = ast.Del
 
+class MemoEntry(object):
+    def __init__(self, methodname, tree, endmark, next):
+        self.methodname = methodname
+        self.tree = tree
+        self.endmark = endmark
+        self.next = next
+
+def find_memo(tok, methodname):
+    memo = tok.memo
+    while memo:
+        if memo.methodname == methodname:
+            return memo
+        memo = memo.next
+    return None
 
 def shorttok(tok):
     return "%-25.25s" % ("%s.%s: %s:%r" % (tok.lineno, tok.column, tok.token_type, tok.value))
@@ -51,33 +65,26 @@ def memoize(method):
     """Memoize a symbol method."""
     method_name = method.__name__
 
-    def memoize_wrapper(self, *args):
-        mark = self._mark()
-        key = mark, method_name, args
+    def memoize_wrapper(self):
+        tok = self.peek()
+        memo = find_memo(tok, method_name)
         # Fast path: cache hit, and not verbose.
-        if key in self._cache and not self._verbose:
-            tree, endmark = self._cache[key]
-            self._reset(endmark)
-            return tree
+        if memo:
+            self._reset(memo.endmark)
+            return memo.tree
         # Slow path: no cache hit, or verbose.
         verbose = self._verbose
-        argsr = ",".join(repr(arg) for arg in args)
-        fill = "  " * self._level
-        if key not in self._cache:
-            if verbose:
-                print "%s%s(%s) .... (looking at %s)" % (fill, method_name, argsr, self.showpeek())
-            self._level += 1
-            tree = method(self, *args)
-            self._level -= 1
-            if verbose:
-                print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
-            endmark = self._mark()
-            self._cache[key] = tree, endmark
-        else:
-            tree, endmark = self._cache[key]
-            if verbose:
-                print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
-            self._reset(endmark)
+        if verbose:
+            fill = "  " * self._level
+        if verbose:
+            print "%s%s() .... (looking at %s)" % (fill, method_name, self.showpeek())
+        self._level += 1
+        tree = method(self)
+        self._level -= 1
+        if verbose:
+            print "%s... %s() --> %s" % (fill, method_name, tree)
+        endmark = self._mark()
+        tok.memo = MemoEntry(method_name, tree, endmark, tok.memo)
         return tree
 
     memoize_wrapper.__wrapped__ = method  # type: ignore
@@ -90,74 +97,67 @@ def memoize_left_rec(method):
 
     def memoize_left_rec_wrapper(self):
         mark = self._mark()
-        key = mark, method_name, ()
-        # Fast path: cache hit, and not verbose.
-        if key in self._cache and not self._verbose:
-            tree, endmark = self._cache[key]
-            self._reset(endmark)
-            return tree
-        # Slow path: no cache hit, or verbose.
-        verbose = self._verbose
+        tok = self.peek()
+        memo = find_memo(tok, method_name)
+        # Fast path: cache hit
+        if memo:
+            self._reset(memo.endmark)
+            return memo.tree
         fill = "  " * self._level
-        if key not in self._cache:
+        # key not in cache
+        verbose = self._verbose
+        if verbose:
+            print "%s%s .... (looking at %s)" % (fill, method_name, self.showpeek())
+        self._level += 1
+
+        # For left-recursive rules we manipulate the cache and
+        # loop until the rule shows no progress, then pick the
+        # previous result.  For an explanation why this works, see
+        # https://github.com/PhilippeSigaud/Pegged/wiki/Left-Recursion
+        # (But we use the memoization cache instead of a static
+        # variable; perhaps this is similar to a paper by Warth et al.
+        # (http://web.cs.ucla.edu/~todd/research/pub.php?id=pepm08).
+
+        # Prime the cache with a failure.
+        memo = tok.memo = MemoEntry(method_name, None, mark, tok.memo)
+        lastresult, lastmark = None, mark
+        depth = 0
+        if verbose:
+            print "%sRecursive %s at %s depth %s" % (fill, method_name, mark, depth)
+
+        while True:
+            self._reset(mark)
+            self.in_recursive_rule += 1
+            try:
+                result = method(self)
+            finally:
+                self.in_recursive_rule -= 1
+            endmark = self._mark()
+            depth += 1
             if verbose:
-                print "%s%s .... (looking at %s)" % (fill, method_name, self.showpeek())
-            self._level += 1
-
-            # For left-recursive rules we manipulate the cache and
-            # loop until the rule shows no progress, then pick the
-            # previous result.  For an explanation why this works, see
-            # https://github.com/PhilippeSigaud/Pegged/wiki/Left-Recursion
-            # (But we use the memoization cache instead of a static
-            # variable; perhaps this is similar to a paper by Warth et al.
-            # (http://web.cs.ucla.edu/~todd/research/pub.php?id=pepm08).
-
-            # Prime the cache with a failure.
-            self._cache[key] = None, mark
-            lastresult, lastmark = None, mark
-            depth = 0
-            if verbose:
-                print "%sRecursive %s at %s depth %s" % (fill, method_name, mark, depth)
-
-            while True:
-                self._reset(mark)
-                self.in_recursive_rule += 1
-                try:
-                    result = method(self)
-                finally:
-                    self.in_recursive_rule -= 1
-                endmark = self._mark()
-                depth += 1
+                print "%sRecursive %s at %s depth %s: %.200s to %s" % (fill, method_name, mark, depth, result, endmark)
+            if not result:
                 if verbose:
-                    print "%sRecursive %s at %s depth %s: %.200s to %s" % (fill, method_name, mark, depth, result, endmark)
-                if not result:
-                    if verbose:
-                        print "%sFail with %.200s to %s" % (fill, lastresult, lastmark)
-                    break
-                if endmark <= lastmark:
-                    if verbose:
-                        print "%sBailing with %.200s to %s" % (fill, lastresult, lastmark)
-                    break
-                self._cache[key] = lastresult, lastmark = result, endmark
+                    print "%sFail with %.200s to %s" % (fill, lastresult, lastmark)
+                break
+            if endmark <= lastmark:
+                if verbose:
+                    print "%sBailing with %.200s to %s" % (fill, lastresult, lastmark)
+                break
+            memo.tree, memo.endmark = lastresult, lastmark = result, endmark
 
-            self._reset(lastmark)
-            tree = lastresult
+        self._reset(lastmark)
+        tree = lastresult
 
-            self._level -= 1
-            if verbose:
-                print "%s... %s() --> %s [cached]" % (fill, method_name, tree)
-            if tree:
-                endmark = self._mark()
-            else:
-                endmark = mark
-                self._reset(endmark)
-            self._cache[key] = tree, endmark
+        self._level -= 1
+        if verbose:
+            print "%s... %s() --> %s [cached]" % (fill, method_name, tree)
+        if tree:
+            endmark = self._mark()
         else:
-            tree, endmark = self._cache[key]
-            if verbose:
-                print "%s... %s() --> %s [fresh]" % (fill, method_name, tree)
-            if tree:
-                self._reset(endmark)
+            endmark = mark
+            self._reset(endmark)
+        memo.tree, memo.endmark = tree, endmark
         return tree
 
     memoize_left_rec_wrapper.__wrapped__ = method  # type: ignore
@@ -171,7 +171,7 @@ class Parser:
 
     # SOFT_KEYWORDS: ClassVar[Tuple[str, ...]]
 
-    def __init__(self, space, tokengen, compile_info, verbose=False):
+    def __init__(self, space, tokenlist, compile_info, verbose=False):
         # initialize tokenization stuff
         self._tokens = []
         self._lines = {}
@@ -179,9 +179,9 @@ class Parser:
         self.type_ignores = []
         self.compile_info = compile_info
         # delete final NEWLINE
-        assert tokengen[-2].token_type == pytoken.python_tokens['NEWLINE']
-        del tokengen[-2]
-        for tok in tokengen:
+        assert tokenlist[-2].token_type == pytoken.python_tokens['NEWLINE']
+        del tokenlist[-2]
+        for tok in tokenlist:
             # Special handling for TYPE_IGNOREs
             if tok.token_type == tokens.TYPE_IGNORE:
                 self.type_ignores.append(tok)
@@ -200,6 +200,7 @@ class Parser:
                 index = self.KEYWORD_INDICES.get(tok.value, -1)
                 if index != -1:
                     tok.token_type = index
+            tok.memo = None
             self._tokens.append(tok)
             if not self._path and tok.line:
                 self._lines[tok.lineno] = tok.line
@@ -235,6 +236,8 @@ class Parser:
         self._verbose = False
         self._level = 0
         self._cache = {}
+        for tok in self._tokens:
+            tok.memo = None
         self.in_recursive_rule = 0
 
 
@@ -484,8 +487,8 @@ class Parser:
                 feature_version = self.py_version[1]
             def recursive_parse_to_ast(self, str, info):
                 from pypy.interpreter.pyparser import pytokenizer as tokenize
-                tokengen = tokenize.generate_tokens(str.splitlines(), 0)
-                parser = PythonParser(origself.space, tokengen, origself.compile_info, verbose=False)
+                tokenlist = tokenize.generate_tokens(str.splitlines(), 0)
+                parser = PythonParser(origself.space, tokenlist, origself.compile_info, verbose=False)
                 return parser.eval()
             def check_feature(self, condition, version, msg, n):
                  if condition and self.compile_info.feature_version < version:
