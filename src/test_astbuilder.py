@@ -591,7 +591,7 @@ class TestAstBuilder:
         assert isinstance(fn.args.kw_defaults[0], ast.Constant)
         input = "def f(p1, *, **k1):  pass"
         exc = pytest.raises(SyntaxError, self.get_ast, input).value
-        #assert exc.msg == "named arguments must follows bare *" # XXX
+        assert exc.msg == "named arguments must follow bare *"
 
     def test_posonly_arguments(self):
         fn = self.get_first_stmt("def f(a, b, c, /, arg): pass")
@@ -708,14 +708,14 @@ class TestAstBuilder:
         assert isinstance(subscript, ast.AnnAssign)
         assert isinstance(subscript.target, ast.Subscript)
 
-        #exc_tuple = pytest.raises(SyntaxError, self.get_ast, 'a, b: int').value # XXX
-        #assert exc_tuple.msg == "only single target (not tuple) can be annotated"
+        exc_tuple = pytest.raises(SyntaxError, self.get_ast, 'a, b: int').value # XXX
+        assert exc_tuple.msg == "only single target (not tuple) can be annotated"
 
-        #exc_list = pytest.raises(SyntaxError, self.get_ast, '[]: int').value
-        #assert exc_list.msg == "only single target (not list) can be annotated"
+        exc_list = pytest.raises(SyntaxError, self.get_ast, '[]: int').value
+        assert exc_list.msg == "only single target (not list) can be annotated"
 
-        #exc_bad_target = pytest.raises(SyntaxError, self.get_ast, '{}: int').value
-        #assert exc_bad_target.msg == "illegal target for annotation"
+        exc_bad_target = pytest.raises(SyntaxError, self.get_ast, '{}: int').value
+        assert exc_bad_target.msg == "illegal target for annotation"
 
 
     def test_augassign(self):
@@ -1244,11 +1244,14 @@ class TestAstBuilder:
         s = self.get_first_expr("'hi' ' implicitly' ' extra'")
         assert isinstance(s, ast.Constant)
         assert space.eq_w(s.value, space.wrap("hi implicitly extra"))
-        return # XXX
         s = self.get_first_expr("b'hi' b' implicitly' b' extra'")
         assert isinstance(s, ast.Constant)
         assert space.eq_w(s.value, space.newbytes("hi implicitly extra"))
-        pytest.raises(SyntaxError, self.get_first_expr, "b'hello' 'world'")
+        excinfo = pytest.raises(SyntaxError, self.get_first_expr, "b'hello' 'world'")
+        assert excinfo.value.offset == 0
+        excinfo = pytest.raises(SyntaxError, self.get_first_expr, "'foo' b'hello' 'world'")
+        assert excinfo.value.offset == 6
+        return # XXX
         sentence = u"Die Männer ärgern sich!"
         source = u"# coding: utf-7\nstuff = '%s'" % (sentence,)
         info = pyparse.CompileInfo("<test>", "exec")
@@ -1601,9 +1604,9 @@ class TestAstBuilder:
     def get_first_typed_stmt(self, source):
         return self.get_first_stmt(source, flags=consts.PyCF_TYPE_COMMENTS)
 
-    def xtest_type_comments(self): # XXX
-        eq_w, w = self.space.eq_w, self.space.wrap
+    def test_type_comments(self):
         assign = self.get_first_typed_stmt("a = 5 # type: int")
+        eq_w, w = self.space.eq_w, self.space.wrap
         assert eq_w(assign.type_comment, w('int'))
         lines = (
             "def func(\n"
@@ -1618,14 +1621,14 @@ class TestAstBuilder:
         assert eq_w(args.args[1].type_comment, w("int"))
         assert self.space.is_w(args.args[2].type_comment, self.space.w_None)
 
-    def xtest_type_comments_func_body(self): # XXX
-        eq_w, w = self.space.eq_w, self.space.wrap
+    def test_type_comments_func_body(self):
         source = textwrap.dedent("""\
         def foo():
             # type: () -> int
             pass
         """)
         func = self.get_first_typed_stmt(source)
+        eq_w, w = self.space.eq_w, self.space.wrap
         assert eq_w(func.type_comment, w("() -> int"))
 
         source = textwrap.dedent("""\
@@ -1635,7 +1638,7 @@ class TestAstBuilder:
         func = self.get_first_typed_stmt(source)
         assert eq_w(func.type_comment, w("() -> int"))
 
-    def xtest_type_comments_statements(self): # XXX
+    def test_type_comments_statements(self):
         self.get_first_typed_stmt("1")
         eq_w, w = self.space.eq_w, self.space.wrap
         asyncdef = textwrap.dedent("""\

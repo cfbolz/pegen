@@ -331,9 +331,10 @@ class Parser:
 
     def type_comment(self):
         tok = self.peek()
+        space = self.space
         if tok.token_type == tokens.TYPE_COMMENT:
-            return self.getnext()
-        return None
+            return space.newtext(self.getnext().value)
+        return space.w_None
 
     def soft_keyword(self):
         tok = self.peek()
@@ -474,6 +475,7 @@ class Parser(Parser):
         # XXX very hacky, fix later!
         from pypy.interpreter.pyparser.parser import Nonterminal, Terminal
         from pypy.interpreter.astcompiler.fstring import string_parse_literal
+        origself = self
         class FakeASTBuilder(object):
             class compile_info(object):
                 encoding = "utf-8"
@@ -487,6 +489,10 @@ class Parser(Parser):
             def check_feature(self, condition, version, msg, n):
                  if condition and self.compile_info.feature_version < version:
                     return self.error(msg, n)   
+            def error_ast(self, msg, node):
+                origself.raise_syntax_error_known_location(msg, node)
+            def error(self, msg, node):
+                origself.raise_syntax_error_known_location(msg, node)
 
             space = self.space
         return string_parse_literal(FakeASTBuilder(), Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
@@ -1793,7 +1799,7 @@ type_expressions[list]:
     | a=','.expression+ {a}
 
 func_type_comment:
-    | NEWLINE t=TYPE_COMMENT &(NEWLINE INDENT) { t.value }  # Must be followed by indented block
+    | NEWLINE t=TYPE_COMMENT &(NEWLINE INDENT) { t }  # Must be followed by indented block
     | invalid_double_type_comments
     | TYPE_COMMENT
 
