@@ -14,38 +14,9 @@ from pypy.interpreter.pyparser.pygram import tokens
 from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 from pypy.interpreter.pyparser.error import SyntaxError
 
-# Singleton ast nodes, created once for efficiency
 Load = ast.Load
 Store = ast.Store
 Del = ast.Del
-
-EXPR_NAME_MAPPING = {
-    ast.Attribute: "attribute",
-    ast.Subscript: "subscript",
-    ast.Starred: "starred",
-    ast.Name: "name",
-    ast.List: "list",
-    ast.Tuple: "tuple",
-    ast.Lambda: "lambda",
-    ast.Call: "function call",
-    ast.BoolOp: "expression",
-    ast.BinOp: "expression",
-    ast.UnaryOp: "expression",
-    ast.GeneratorExp: "generator expression",
-    ast.Yield: "yield expression",
-    ast.YieldFrom: "yield expression",
-    ast.Await: "await expression",
-    ast.ListComp: "list comprehension",
-    ast.SetComp: "set comprehension",
-    ast.DictComp: "dict comprehension",
-    ast.Dict: "dict literal",
-    ast.Set: "set display",
-    ast.JoinedStr: "f-string expression",
-    ast.FormattedValue: "f-string expression",
-    ast.Compare: "comparison",
-    ast.IfExp: "conditional expression",
-    ast.NamedExpr: "named expression",
-}
 
 
 def shorttok(tok):
@@ -224,7 +195,7 @@ class Parser:
         self._highwatermark = 0
 
         # parser stuff
-        self._verbose = True
+        self._verbose = verbose
         self._level = 0
         self._cache = {}
         # Integer tracking wether we are in a left recursive rule or not. Can be useful
@@ -233,6 +204,13 @@ class Parser:
 
         self.call_invalid_rules = False
 
+    def parse(self, entry):
+        res = entry()
+        if res is not None:
+            return res
+        self.reset()
+        self.call_invalid_rules = True
+        entry() # usually raises
 
     def reset(self):
         self._index = 0
@@ -437,22 +415,7 @@ class Parser(Parser):
     def get_expr_name(self, node):
         """Get a descriptive name for an expression."""
         # See https://github.com/python/cpython/blob/master/Parser/pegen.c#L161
-        assert node is not None
-        node_t = type(node)
-        if node_t is ast.Constant:
-            v = node.value
-            if v in (None, True, False, Ellipsis):
-                return str(v)
-            else:
-                return "literal"
-
-        try:
-            return EXPR_NAME_MAPPING[node_t]
-        except KeyError:
-            raise ValueError(
-                ("unexpected expression in assignment %s "
-                "(line %s).") % (type(node).__name__, node.lineno)
-            )
+        return node._get_descr(self.space)
 
     def set_expr_context(self, node, context):
         """Set the context (Load, Store, Del) of an ast node."""
@@ -587,7 +550,7 @@ class Parser(Parser):
 
         raise SyntaxError(
             message,
-            start[0], start[1], line + "\\n", self.filename, lastlineno=end[0]
+            start[0], start[1], line, self.filename, lastlineno=end[0]
         )
 
     def raise_syntax_error(self, message):
@@ -1904,7 +1867,7 @@ invalid_named_expression[NoReturn]:
 invalid_assignment[NoReturn]:
     | a=invalid_ann_assign_target ':' expression {
         self.raise_syntax_error_known_location(
-            "only single target (not {self.get_expr_name(a)}) can be annotated", a
+            "only single target (not %s) can be annotated" % (self.get_expr_name(a), ), a
         )
      }
     | a=star_named_expression ',' star_named_expressions* ':' expression {
@@ -1912,14 +1875,14 @@ invalid_assignment[NoReturn]:
     | a=expression ':' expression {
         self.raise_syntax_error_known_location("illegal target for annotation", a) }
     | (star_targets '=')* a=star_expressions '=' {
-        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
     | (star_targets '=')* a=yield_expr '=' {
         self.raise_syntax_error_known_location("assignment to yield expression not possible", a)
      }
     | a=star_expressions augassign (yield_expr | star_expressions) {
         self.raise_syntax_error_known_location(
-            "{self.get_expr_name(a)} is an illegal expression for augmented assignment", a
+            "%s is an illegal expression for augmented assignment" % (self.get_expr_name(a), ), a
         )
      }
 invalid_ann_assign_target[ast.AST]:
@@ -1979,12 +1942,12 @@ invalid_double_type_comments[NoReturn]:
      }
 invalid_with_item[NoReturn]:
     | expression 'as' a=expression &(',' | ')' | ':') {
-        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
 
 invalid_for_target[NoReturn]:
     | 'async'? 'for' a=star_expressions {
-        self.raise_syntax_error_known_location("cannot assign to {self.get_expr_name(a)}", a)
+        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
 
 invalid_group[NoReturn]:
@@ -1995,8 +1958,8 @@ invalid_group[NoReturn]:
         self.raise_syntax_error_known_location("cannot use double starred expression here", a)
      }
 invalid_import_from_targets[NoReturn]:
-    | import_from_as_names ',' NEWLINE {
-        self.raise_syntax_error("trailing comma not allowed without surrounding parentheses")
+    | import_from_as_names a=',' NEWLINE {
+        self.raise_syntax_error_known_location("trailing comma not allowed without surrounding parentheses", a)
      }
 
 invalid_with_stmt[None]:
