@@ -14,7 +14,7 @@ from pypy.interpreter.pyparser.error import SyntaxError
 from pypy.interpreter.astcompiler import ast
 from pypy.interpreter.astcompiler.astbuilder import parse_number
 from pypy.interpreter.astcompiler import asthelpers # Side effects
-from pypy.interpreter.astcompiler import misc
+from pypy.interpreter.astcompiler import consts, misc
 
 Load = ast.Load
 Store = ast.Store
@@ -171,12 +171,13 @@ class Parser:
 
     # SOFT_KEYWORDS: ClassVar[Tuple[str, ...]]
 
-    def __init__(self, tokengen, verbose=False):
+    def __init__(self, space, tokengen, compile_info, verbose=False):
         # initialize tokenization stuff
         self._tokens = []
         self._lines = {}
         self._path = "" # XXX
         self.type_ignores = []
+        self.compile_info = compile_info
         # delete final NEWLINE
         assert tokengen[-2].token_type == pytoken.python_tokens['NEWLINE']
         del tokengen[-2]
@@ -196,7 +197,7 @@ class Parser:
             ):
                 continue
             self._tokens.append(tok)
-            if not self._path:
+            if not self._path and tok.line:
                 self._lines[tok.lineno] = tok.line
         self._index = 0
         self._highwatermark = 0
@@ -210,6 +211,10 @@ class Parser:
         self.in_recursive_rule = 0
 
         self.call_invalid_rules = False
+
+        self.py_version = (3, 9)
+        self.space = space
+
 
     def parse(self, entry):
         res = entry()
@@ -383,28 +388,6 @@ class Parser:
         self._reset(mark)
         return not ok
 
-BaseParser = Parser
-
-
-class Parser(Parser):
-
-    #: Name of the source file, used in error reports
-
-    def __init__(self,
-        tokenizer,
-        verbose=False,
-        filename="<unknown>",
-        py_version=None,
-        space=None,
-    ):
-        BaseParser.__init__(self, tokenizer, verbose=verbose)
-        self.filename = filename
-        self.py_version = (3, 9)
-        if space is None:
-            from pypy.tool.pytest.objspace import gettestobjspace
-            space = gettestobjspace()
-        self.space = space
-
     def check_version(self, min_version, error_msg, node):
         """Check that the python version is high enough for a rule to apply.
 
@@ -489,7 +472,7 @@ class Parser(Parser):
             def recursive_parse_to_ast(self, str, info):
                 from pypy.interpreter.pyparser import pytokenizer as tokenize
                 tokengen = tokenize.generate_tokens(str.splitlines(), 0)
-                parser = PythonParser(tokengen, verbose=False)
+                parser = PythonParser(origself.space, tokengen, origself.compile_info, verbose=False)
                 return parser.eval()
             def check_feature(self, condition, version, msg, n):
                  if condition and self.compile_info.feature_version < version:
@@ -590,13 +573,13 @@ class Parser(Parser):
             line = tok.line
         else:
             # End is used only to get the proper text
-            line = "\\n".join(
+            line = "".join(
                 self.get_lines(list(range(start[0], end[0] + 1)))
             )
 
         raise SyntaxError(
             message,
-            start[0], start[1], line, self.filename, lastlineno=end[0]
+            start[0], start[1], line, self.compile_info.filename, lastlineno=end[0]
         )
 
     def raise_syntax_error(self, message):
@@ -655,6 +638,34 @@ class Parser(Parser):
             tag = self.space.newtext(type_ignore.value)
             type_ignores.append(ast.TypeIgnore(type_ignore.lineno, tag))
         return type_ignores
+
+    def check_barry(self, tok):
+        flufl = self.compile_info.flags & consts.CO_FUTURE_BARRY_AS_BDFL
+        if flufl and tok.value == '!=':
+            self.raise_syntax_error_known_location("with Barry as BDFL, use '<>' instead of '!='", tok)
+        elif not flufl and tok.value == '<>':
+            self.raise_syntax_error_known_location('invalid syntax', tok)
+        return tok
+
+    def kwarg_illegal_assignment(self, a, b):
+        import pdb; pdb.set_trace()
+        space = self.space
+        if isinstance(a, ast.Constant):
+            if space.is_w(a.value, space.w_True):
+                error = "True"
+            elif space.is_w(a.value, space.w_False):
+                error = "False"
+            elif space.is_w(a.value, space.w_None):
+                error = "None"
+            else:
+                error = None
+            if error is not None:
+                self.raise_syntax_error_known_range(
+                    "cannot assign to " + error, a, b,
+                )
+        self.raise_syntax_error_known_range(
+            "expression cannot contain assignment, perhaps you meant \\"==\\"?", a, b,
+        )
 '''
 
 
@@ -1412,9 +1423,8 @@ compare_op_bitwise_or_pair:
     | is_bitwise_or
 
 eq_bitwise_or: '==' a=bitwise_or { (ast.Eq, a) }
-# Do not support the Barry as BDFL <> for not eq
 noteq_bitwise_or[tuple]:
-    | '!=' a=bitwise_or { (ast.NotEq, a) }
+    | tok='!=' a=bitwise_or { self.check_barry(tok) and (ast.NotEq, a) }
 lte_bitwise_or: '<=' a=bitwise_or { (ast.LtE, a) }
 lt_bitwise_or: '<' a=bitwise_or { (ast.Lt, a) }
 gte_bitwise_or: '>=' a=bitwise_or { (ast.GtE, a) }
@@ -1526,13 +1536,13 @@ slice:
 atom:
     | a=NAME { ast.Name(id=a.value, ctx=Load, LOCATIONS) }
     | 'True' {
-        ast.Constant(value=True, kind=None, LOCATIONS)
+        ast.Constant(value=self.space.w_True, kind=None, LOCATIONS)
      }
     | 'False' {
-        ast.Constant(value=False, kind=None, LOCATIONS)
+        ast.Constant(value=self.space.w_False, kind=None, LOCATIONS)
      }
     | 'None' {
-        ast.Constant(value=None, kind=None, LOCATIONS)
+        ast.Constant(value=self.space.w_None, kind=None, LOCATIONS)
      }
     | &STRING strings
     | a=NUMBER {
@@ -1656,11 +1666,11 @@ for_if_clause[ast.comprehension]:
         self.check_version(
             (3, 6),
             "Async comprehensions are",
-            ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=1)
+            ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=True)
         )
      }
     | 'for' a=star_targets 'in' ~ b=disjunction c=('if' z=disjunction { z })* {
-       ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=0) }
+       ast.comprehension(target=a, iter=b, ifs=c if c else None, is_async=False) }
     | invalid_for_target
 
 listcomp[ast.ListComp]:
@@ -1865,9 +1875,7 @@ invalid_kwarg[NoReturn]:
         )
      }
     | !(NAME '=') a=expression b='=' {
-        self.raise_syntax_error_known_range(
-            "expression cannot contain assignment, perhaps you meant \"==\"?", a, b,
-        )
+        self.kwarg_illegal_assignment(a, b)
      }
 
 expression_without_invalid[ast.AST]:
