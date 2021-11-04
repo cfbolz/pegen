@@ -203,6 +203,9 @@ class Parser:
         self._tokens = []
         self._lines = {}
         self._path = "" # XXX
+        # delete final NEWLINE
+        assert tokengen[-2].token_type == pytoken.python_tokens['NEWLINE']
+        del tokengen[-2]
         for tok in tokengen:
             if tok.token_type in (tokens.NL, tokens.COMMENT):
                 continue

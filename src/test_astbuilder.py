@@ -25,8 +25,6 @@ class TestAstBuilder:
             flags |= consts.PyCF_ASYNC_HACKS
 
         tokengen = tokenize.generate_tokens(source.splitlines(True), 0)
-        assert tokengen[-2].token_type == pytoken.python_tokens['NEWLINE']
-        del tokengen[-2]
         parser = PythonParser(tokengen, verbose=False)
         self.space = parser.space
         if p_mode == "eval":
