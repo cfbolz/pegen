@@ -718,11 +718,11 @@ simple_stmt (memo):
     | &'nonlocal' nonlocal_stmt
 
 compound_stmt:
-    | &('def' | '@' | 'async') function_def
+    | &('def' | '@' | ASYNC) function_def
     | &'if' if_stmt
     | &('class' | '@') class_def
-    | &('with' | 'async') with_stmt
-    | &('for' | 'async') for_stmt
+    | &('with' | ASYNC) with_stmt
+    | &('for' | ASYNC) for_stmt
     | &'try' try_stmt
     | &'while' while_stmt
     | match_stmt
@@ -914,7 +914,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
             LOCATIONS,
         )
      }
-    | 'async' 'def' n=NAME '(' params=[params] ')' a=['->' z=expression { z }] &&':' tc=[func_type_comment] b=block {
+    | ASYNC 'def' n=NAME '(' params=[params] ')' a=['->' z=expression { z }] &&':' tc=[func_type_comment] b=block {
        self.check_version(
             (3, 5),
             "Async functions are",
@@ -1034,7 +1034,7 @@ for_stmt[Union[ast.For, ast.AsyncFor]]:
     | invalid_for_stmt
     | 'for' t=star_targets 'in' ~ ex=star_expressions &&':' tc=[TYPE_COMMENT] b=block el=[else_block] {
         ast.For(target=t, iter=ex, body=b, orelse=el, type_comment=tc, LOCATIONS) }
-    | 'async' 'for' t=star_targets 'in' ~ ex=star_expressions ':' tc=[TYPE_COMMENT] b=block el=[else_block] {
+    | ASYNC 'for' t=star_targets 'in' ~ ex=star_expressions ':' tc=[TYPE_COMMENT] b=block el=[else_block] {
         self.check_version(
             (3, 5),
             "Async for loops are",
@@ -1056,14 +1056,14 @@ with_stmt[Union[ast.With, ast.AsyncWith]]:
     | 'with' a=','.with_item+ ':' tc=[TYPE_COMMENT] b=block {
         ast.With(items=a, body=b, type_comment=tc, LOCATIONS)
      }
-    | 'async' 'with' '(' a=','.with_item+ ','? ')' ':' b=block {
+    | ASYNC 'with' '(' a=','.with_item+ ','? ')' ':' b=block {
        self.check_version(
            (3, 9),
            "Parenthesized with items",
            ast.AsyncWith(items=a, body=b, LOCATIONS)
         )
      }
-    | 'async' 'with' a=','.with_item+ ':' tc=[TYPE_COMMENT] b=block {
+    | ASYNC 'with' a=','.with_item+ ':' tc=[TYPE_COMMENT] b=block {
        self.check_version(
            (3, 5),
            "Async with statements are",
@@ -1491,7 +1491,7 @@ power:
 # Primary elements are things like "obj.something.something", "obj[something]", "obj(something)", "obj" ...
 
 await_primary (memo):
-    | 'await' a=primary { self.check_version((3, 5), "Await expressions are", ast.Await(a, LOCATIONS)) }
+    | AWAIT a=primary { self.check_version((3, 5), "Await expressions are", ast.Await(a, LOCATIONS)) }
     | primary
 
 primary:
@@ -1665,7 +1665,7 @@ for_if_clauses[List[ast.comprehension]]:
     | a=for_if_clause+ { a }
 
 for_if_clause[ast.comprehension]:
-    | 'async' 'for' a=star_targets 'in' ~ b=disjunction c=('if' z=disjunction { z })* {
+    | ASYNC 'for' a=star_targets 'in' ~ b=disjunction c=('if' z=disjunction { z })* {
         self.check_version(
             (3, 6),
             "Async comprehensions are",
@@ -2010,7 +2010,7 @@ invalid_with_item[NoReturn]:
      }
 
 invalid_for_target[NoReturn]:
-    | 'async'? 'for' a=star_expressions {
+    | ASYNC? 'for' a=star_expressions {
         self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
 
@@ -2027,15 +2027,15 @@ invalid_import_from_targets[NoReturn]:
      }
 
 invalid_with_stmt[None]:
-    | ['async'] 'with' ','.(expression ['as' star_target])+ &&':' { UNREACHABLE }
-    | ['async'] 'with' '(' ','.(expressions ['as' star_target])+ ','? ')' &&':' { UNREACHABLE }
+    | [ASYNC] 'with' ','.(expression ['as' star_target])+ &&':' { UNREACHABLE }
+    | [ASYNC] 'with' '(' ','.(expressions ['as' star_target])+ ','? ')' &&':' { UNREACHABLE }
 invalid_with_stmt_indent[NoReturn]:
-    | ['async'] a='with' ','.(expression ['as' star_target])+ ':' NEWLINE !INDENT {
+    | [ASYNC] a='with' ','.(expression ['as' star_target])+ ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after 'with' statement on line {a.lineno}"
         )
      }
-    | ['async'] a='with' '(' ','.(expressions ['as' star_target])+ ','? ')' ':' NEWLINE !INDENT {
+    | [ASYNC] a='with' '(' ','.(expressions ['as' star_target])+ ','? ')' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after 'with' statement on line {a.lineno}"
         )
@@ -2140,13 +2140,13 @@ invalid_while_stmt[NoReturn]:
         )
      }
 invalid_for_stmt[NoReturn]:
-    | ['async'] a='for' star_targets 'in' star_expressions ':' NEWLINE !INDENT {
+    | [ASYNC] a='for' star_targets 'in' star_expressions ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after 'for' statement on line {a.lineno}"
         )
      }
 invalid_def_raw[NoReturn]:
-    | ['async'] a='def' NAME '(' [params] ')' ['->' expression] ':' NEWLINE !INDENT {
+    | [ASYNC] a='def' NAME '(' [params] ')' ['->' expression] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
             "expected an indented block after function definition on line {a.lineno}"
         )
