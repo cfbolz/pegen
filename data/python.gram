@@ -7,12 +7,14 @@ import io
 import os
 import sys
 
-from pypy.interpreter.astcompiler import ast
-from pypy.interpreter.astcompiler.astbuilder import parse_number
-
 from pypy.interpreter.pyparser.pygram import tokens
 from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 from pypy.interpreter.pyparser.error import SyntaxError
+
+from pypy.interpreter.astcompiler import ast
+from pypy.interpreter.astcompiler.astbuilder import parse_number
+from pypy.interpreter.astcompiler import asthelpers # Side effects
+from pypy.interpreter.astcompiler import misc
 
 Load = ast.Load
 Store = ast.Store
@@ -216,7 +218,7 @@ class Parser:
         self._index = 0
         self._highwatermark = 0
 
-        self._verbose = True
+        self._verbose = False
         self._level = 0
         self._cache = {}
         self.in_recursive_rule = 0
@@ -414,13 +416,29 @@ class Parser(Parser):
 
     def get_expr_name(self, node):
         """Get a descriptive name for an expression."""
-        # See https://github.com/python/cpython/blob/master/Parser/pegen.c#L161
         return node._get_descr(self.space)
 
     def set_expr_context(self, node, context):
         """Set the context (Load, Store, Del) of an ast node."""
-        node.ctx = context
+        try:
+            node.set_context(self.space, context)
+        except ast.UnacceptableExpressionContext as e:
+            self.raise_syntax_error_known_location(e.msg, e.node)
+        except misc.ForbiddenNameAssignment as e:
+            self.raise_syntax_error_known_location("cannot assign to %s" % (e.name,), e.node)
         return node
+
+    def check_for_forbidden_name(self, tok):
+        from pypy.interpreter.astcompiler import misc # Side effects
+        if tok is None:
+            return None
+        name = tok.value
+        try:
+            misc.check_forbidden_name(self.space, name)
+        except misc.ForbiddenNameAssignment as e:
+            self.raise_syntax_error_known_location(
+                "cannot assign to %s" % (e.name,), tok)
+        return tok.value
 
     def ensure_real(self, number_str):
         number = ast.literal_eval(number_str)
@@ -772,12 +790,13 @@ import_from_targets[List[ast.alias]]:
 import_from_as_names[List[ast.alias]]:
     | a=','.import_from_as_name+ { a }
 import_from_as_name[ast.alias]:
-    | a=NAME b=['as' z=NAME { z.value }] { ast.alias(name=a.value, asname=b) }
+    | a=NAME b=['as' z=NAME { z }] { ast.alias(name=self.check_for_forbidden_name(a), asname=self.check_for_forbidden_name(b)) }
 dotted_as_names[List[ast.alias]]:
     | a=','.dotted_as_name+ { a }
 dotted_as_name[ast.alias]:
-    | a=dotted_name b=['as' z=NAME { z.value }] { ast.alias(name=a, asname=b) }
+    | a=dotted_name b=['as' z=NAME { z }] { ast.alias(name=a, asname=self.check_for_forbidden_name(b)) }
 dotted_name[str]:
+    | a=NAME ! '.' { self.check_for_forbidden_name(a) } # single name without following dots
     | a=dotted_name '.' b=NAME { a + "." + b.value }
     | a=NAME { a.value }
 
@@ -818,7 +837,7 @@ class_def_raw[ast.ClassDef]:
     | invalid_class_def_raw
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] &&':' c=block {
         ast.ClassDef(
-            a.value,
+            self.check_for_forbidden_name(a),
             bases=b[0] if b else None,
             keywords=b[1] if b else None,
             body=c,
@@ -838,7 +857,7 @@ function_def_raw[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
     | invalid_def_raw
     | 'def' n=NAME '(' params=[params] ')' a=['->' z=expression { z }] &&':' tc=[func_type_comment] b=block {
         ast.FunctionDef(
-            name=n.value,
+            name=self.check_for_forbidden_name(n),
             args=params or self.make_arguments(None, [], None, [], None),
             returns=a,
             body=b,
@@ -932,7 +951,7 @@ param_with_default[Tuple[ast.arg, Any]]:
 param_maybe_default[Tuple[ast.arg, Any]]:
     | a=param c=default? ',' tc=TYPE_COMMENT? { (self.set_arg_type_comment(a, tc), c) }
     | a=param c=default? tc=TYPE_COMMENT? &')' { (self.set_arg_type_comment(a, tc), c) }
-param: a=NAME b=annotation? { ast.arg(arg=a.value, annotation=b, type_comment=None, LOCATIONS) }
+param: a=NAME b=annotation? { ast.arg(arg=self.check_for_forbidden_name(a), annotation=b, type_comment=None, LOCATIONS) }
 annotation: ':' a=expression { a }
 default: '=' a=expression { a }
 
@@ -1029,8 +1048,8 @@ try_stmt[ast.Try]:
 
 except_block[ast.ExceptHandler]:
     | invalid_except_stmt_indent
-    | 'except' e=expression t=['as' z=NAME { z.value }] ':' b=block {
-        ast.ExceptHandler(type=e, name=t, body=b, LOCATIONS) }
+    | 'except' e=expression t=['as' z=NAME { z }] ':' b=block {
+        ast.ExceptHandler(type=e, name=self.check_for_forbidden_name(t), body=b, LOCATIONS) }
     | 'except' ':' b=block { ast.ExceptHandler(type=None, name=None, body=b, LOCATIONS) }
     | invalid_except_stmt
 finally_block[list]:
@@ -1557,7 +1576,7 @@ lambda_param_maybe_default[Tuple[ast.arg, Any]]:
     | a=lambda_param c=default? ',' { (a, c) }
     | a=lambda_param c=default? &':' { (a, c) }
 lambda_param[ast.arg]: a=NAME {
-    ast.arg(arg=a.value, annotation=None, type_comment=None, LOCATIONS)
+    ast.arg(arg=self.check_for_forbidden_name(a), annotation=None, type_comment=None, LOCATIONS)
 }
 
 # LITERALS
@@ -1656,12 +1675,12 @@ starred_expression:
 
 kwarg_or_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=a.value, value=b, LOCATIONS) }
+    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_name(a), value=b, LOCATIONS) }
     | a=starred_expression { a }
 
 kwarg_or_double_starred:
     | invalid_kwarg
-    | a=NAME '=' b=expression { ast.keyword(arg=a.value, value=b, LOCATIONS) }   # XXX Unreachable
+    | a=NAME '=' b=expression { ast.keyword(arg=self.check_for_forbidden_name(a), value=b, LOCATIONS) }   # XXX Unreachable
     | '**' a=expression { ast.keyword(arg=None, value=a, LOCATIONS) }
 
 # ASSIGNMENT TARGETS
@@ -1695,7 +1714,7 @@ target_with_star_atom (memo):
     | star_atom
 
 star_atom:
-    | a=NAME { ast.Name(id=a.value, ctx=Store, LOCATIONS) }
+    | a=NAME { self.set_expr_context(ast.Name(id=a.value, ctx=Store, LOCATIONS), Store) }
     | '(' a=target_with_star_atom ')' { self.set_expr_context(a, Store) }
     | '(' a=[star_targets_tuple_seq] ')' { ast.Tuple(elts=a, ctx=Store, LOCATIONS) }
     | '[' a=[star_targets_list_seq] ']' {  ast.List(elts=a, ctx=Store, LOCATIONS) }

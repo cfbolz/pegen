@@ -895,7 +895,7 @@ class TestAstBuilder:
                     self.get_ast(input)
                 assert excinfo.value.msg == "cannot %s %s" % (ctx_type, type_str)
 
-    def xtest_assignment_to_forbidden_names(self): # XXX
+    def test_assignment_to_forbidden_names(self):
         invalid = (
             "%s = x",
             "%s, x = y",
