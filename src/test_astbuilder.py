@@ -24,7 +24,7 @@ class TestAstBuilder:
         if with_async_hacks:
             flags |= consts.PyCF_ASYNC_HACKS
 
-        tokengen = tokenize.generate_tokens(source.splitlines(True), 0)
+        tokengen = tokenize.generate_tokens(source.splitlines(True), flags)
         parser = PythonParser(tokengen, verbose=False)
         self.space = parser.space
         if p_mode == "eval":
@@ -1546,7 +1546,7 @@ class TestAstBuilder:
         assert comp.iter.id == 'c'
         assert comp.is_async is True
 
-    def xtest_without_async_hacks(self): # XXX
+    def test_without_async_hacks(self):
         with pytest.raises(SyntaxError):
             self.get_ast("await = 1", with_async_hacks=False)
 
