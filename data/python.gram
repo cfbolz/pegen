@@ -440,6 +440,20 @@ class Parser(Parser):
                 "cannot assign to %s" % (e.name,), tok)
         return tok.value
 
+    def check_repeated_keywords(self, args):
+        if not args or not args[1]:
+            return None
+        keywords = args[1]
+        if len(keywords) == 1:
+            return keywords
+        d = {}
+        for keyword in keywords:
+            if keyword.arg in d:
+                self.raise_syntax_error_known_location(
+                    "keyword argument repeated: '%s'" % keyword.arg, keyword)
+            d[keyword.arg] = None
+        return keywords
+
     def ensure_real(self, number_str):
         number = ast.literal_eval(number_str)
         if number is not complex:
@@ -819,7 +833,7 @@ decorator:
      }
 dec_maybe_call:
     | dn=dec_primary '(' z=[arguments] ')' {
-        ast.Call(func=dn, args=z[0] if z and z[0] else None, keywords=z[1] if z and z[1] else None, LOCATIONS)
+        ast.Call(func=dn, args=z[0] if z and z[0] else None, keywords=self.check_repeated_keywords(z), LOCATIONS)
      }
     | dec_primary
 dec_primary:
@@ -1454,7 +1468,7 @@ primary:
         ast.Call(
             func=a,
             args=b[0] if b and b[0] else None,
-            keywords=b[1] if b and b[1] else None,
+            keywords=self.check_repeated_keywords(b),
             LOCATIONS,
         )
      }
@@ -1737,7 +1751,7 @@ t_primary:
         ast.Call(
             func=a,
             args=b[0] if b else None,
-            keywords=b[1] if b else None,
+            keywords=self.check_repeated_keywords(b),
             LOCATIONS,
         )
      }
