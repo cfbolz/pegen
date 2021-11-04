@@ -438,7 +438,7 @@ class Parser(Parser):
         except misc.ForbiddenNameAssignment as e:
             self.raise_syntax_error_known_location(
                 "cannot assign to %s" % (e.name,), tok)
-        return tok.value
+        return self.new_identifier(tok.value)
 
     def check_repeated_keywords(self, args):
         if not args or not args[1]:
@@ -453,6 +453,9 @@ class Parser(Parser):
                     "keyword argument repeated: '%s'" % keyword.arg, keyword)
             d[keyword.arg] = None
         return keywords
+
+    def new_identifier(self, name):
+        return misc.new_identifier(self.space, name)
 
     def ensure_real(self, number_str):
         number = ast.literal_eval(number_str)

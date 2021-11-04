@@ -1276,7 +1276,7 @@ class TestAstBuilder:
         assert isinstance(name, ast.Name)
         assert name.id == u"日本".encode('utf-8')
 
-    def xtest_function_pep3131(self): # XXX
+    def test_function_pep3131(self):
         fn = self.get_first_stmt("def µ(µ='foo'): pass")
         assert isinstance(fn, ast.FunctionDef)
         # µ normalized to NFKC
@@ -1284,7 +1284,7 @@ class TestAstBuilder:
         assert fn.name == expected
         assert fn.args.args[0].arg == expected
 
-    def xtest_import_pep3131(self): # XXX
+    def test_import_pep3131(self):
         im = self.get_first_stmt("from packageµ import modµ as µ")
         assert isinstance(im, ast.ImportFrom)
         expected = u'\u03bc'.encode('utf-8')
