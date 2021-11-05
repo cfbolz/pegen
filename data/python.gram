@@ -39,27 +39,15 @@ def find_memo(tok, methodname):
 def shorttok(tok):
     return "%-25.25s" % ("%s.%s: %s:%r" % (tok.lineno, tok.column, tok.token_type, tok.value))
 
-def logger(method):
-    """For non-memoized functions that we want to be logged.
+def log_start(self, method_name):
+    fill = "  " * self._level
+    print "%s%s() .... (looking at %s)" % (fill, method_name, self.showpeek())
+    self._level += 1
 
-    (In practice this is only non-leader left-recursive functions.)
-    """
-    method_name = method.__name__
-
-    def logger_wrapper(self, *args):
-        if not self._verbose:
-            return method(self, *args)
-        argsr = ",".join(repr(arg) for arg in args)
-        fill = "  " * self._level
-        print "%s%s(%s) .... (looking at %s)" % (fill, method_name, argsr, self.showpeek())
-        self._level += 1
-        tree = method(self, *args)
-        self._level -= 1
-        print "%s... %s(%s) --> %s" % (fill, method_name, argsr, tree)
-        return tree
-
-    logger_wrapper.__wrapped__ = method  # type: ignore
-    return logger_wrapper
+def log_end(self, method_name, result):
+    self._level -= 1
+    fill = "  " * self._level
+    print "%s... %s(%s) --> %s" % (fill, method_name, result)
 
 
 def memoize(method):
@@ -77,12 +65,11 @@ def memoize(method):
         verbose = self._verbose
         if verbose:
             fill = "  " * self._level
-        if verbose:
             print "%s%s() .... (looking at %s)" % (fill, method_name, self.showpeek())
-        self._level += 1
+            self._level += 1
         tree = method(self)
-        self._level -= 1
         if verbose:
+            self._level -= 1
             print "%s... %s() --> %s" % (fill, method_name, tree)
         endmark = self._mark()
         tok.memo = MemoEntry(method_name, tree, endmark, tok.memo)
@@ -186,7 +173,14 @@ class FStringAstBuilder(object):
     def error(self, msg, node):
         # XXX bit annoying
         tok = Token(node.type, node.value, node.lineno, node.column, node.line, node.end_lineno, node.end_column)
-        self.parser.raise_syntax_error_known_location_ast(msg, node)
+        self.parser.raise_syntax_error_known_location_tok(msg, tok)
+
+def isspace(s):
+    res = True
+    for c in s:
+        if not c.isspace():
+            res = False
+    return res
 
 class Parser:
     """Parsing base class."""
@@ -212,7 +206,7 @@ class Parser:
                 continue
             if tok.token_type in (tokens.NL, tokens.COMMENT):
                 continue
-            if tok.token_type == tokens.ERRORTOKEN and tok.value.isspace():
+            if tok.token_type == tokens.ERRORTOKEN and isspace(tok.value):
                 continue
             if (
                 tok.token_type == tokens.NEWLINE

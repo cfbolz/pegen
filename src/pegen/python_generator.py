@@ -217,13 +217,12 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
         file: Optional[IO[Text]],
         tokens: Set[str] = set(token.tok_name.values()),
         location_formatting: Optional[str] = None,
-        unreachable_formatting: Optional[str] = None,
     ):
         tokens.add("SOFT_KEYWORD")
         super().__init__(grammar, tokens, file)
         self.callmakervisitor: PythonCallMakerVisitor = PythonCallMakerVisitor(self)
         self.invalidvisitor: InvalidNodeVisitor = InvalidNodeVisitor()
-        self.unreachable_formatting = unreachable_formatting or "None  # pragma: no cover"
+        self.unreachable_formatting = "None  # pragma: no cover"
         self.location_formatting = (
             location_formatting
             or "lineno=start_lineno, col_offset=start_col_offset, "
@@ -273,21 +272,17 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
         if node.left_recursive:
             if node.leader:
                 self.print("@memoize_left_rec")
-            else:
-                # Non-leader rules in a cycle are not memoized,
-                # but they must still be logged.
-                self.print("@logger")
         elif node.memo:
             self.print("@memoize")
-        else:
-            self.print("@logger")
         node_type = node.type or "Any"
+        self.method_name = node.name
         self.print(f"def {node.name}(self): # type Optional[{node_type}]")
         with self.indent():
             self.print(f"# {node.name}: {rhs}")
             if node.nullable:
                 self.print(f"# nullable={node.nullable}")
-            self.print("mark = self._mark()")
+            self.print("mark = self._index")
+            self.print(f"if self._verbose: log_start(self, {node.name})")
             if self.alts_uses_locations(node.rhs.alts):
                 self.print("tok = self.peek()")
                 self.print("start_lineno, start_col_offset = tok.lineno, tok.column")
@@ -295,8 +290,10 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 self.print("children = []")
             self.visit(rhs, is_loop=is_loop, is_gather=is_gather)
             if is_loop:
+                self.print(f"if self._verbose: log_end(self, {node.name}, children)")
                 self.print("return children")
             else:
+                self.print(f"if self._verbose: log_end(self, {node.name}, None)")
                 self.print("return None")
 
     def visit_NamedItem(self, node: NamedItem) -> None:
@@ -363,11 +360,10 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 for i in range(len(assingments)):
                     if assingments[i].endswith(','): # Optional Rule
                         self.print(assingments[i].rstrip(','))
-                        self.print("if True:")
                     else:
                         self.print(assingments[i])
                         self.print("if " + exprs[i] + ":")
-                    self.level += 1
+                        self.level += 1
                 self.level -= 1
 
             with self.indent():
@@ -392,14 +388,21 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
 
                 if is_loop:
                     self.print(f"children.append({action})")
-                    self.print(f"mark = self._mark()")
+                    self.print(f"mark = self._index")
                 else:
                     if "UNREACHABLE" in action:
                         action = action.replace("UNREACHABLE", self.unreachable_formatting)
-                    self.print(f"return {action}")
+                        self.print("assert 0, 'unreachable'")
+                    elif action.isidentifier():
+                        self.print(f"if self._verbose: log_end(self, {self.method_name}, {action})")
+                        self.print(f"return {action}")
+                    else:
+                        self.print(f"tree = {action}")
+                        self.print(f"if self._verbose: log_end(self, {self.method_name}, tree)")
+                        self.print("return tree")
 
             self.level = old_level
-            self.print("self._reset(mark)")
+            self.print("self._index = mark") # XXX verbose
             # Skip remaining alternatives if a cut was reached.
             if has_cut:
                 self.print("if cut: return None")
