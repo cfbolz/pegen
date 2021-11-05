@@ -282,7 +282,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
             if node.nullable:
                 self.print(f"# nullable={node.nullable}")
             self.print("mark = self._index")
-            self.print(f"if self._verbose: log_start(self, {node.name})")
+            self.print(f"if self._verbose: log_start(self, {node.name!r})")
             if self.alts_uses_locations(node.rhs.alts):
                 self.print("tok = self.peek()")
                 self.print("start_lineno, start_col_offset = tok.lineno, tok.column")
@@ -394,7 +394,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                         action = action.replace("UNREACHABLE", self.unreachable_formatting)
                         self.print("assert 0, 'unreachable'")
                     elif action.isidentifier():
-                        self.print(f"if self._verbose: log_end(self, {self.method_name}, {action})")
+                        self.print(f"if self._verbose: log_end(self, {self.method_name!r}, {action})")
                         self.print(f"return {action}")
                     else:
                         self.print(f"tree = {action}")
