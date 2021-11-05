@@ -431,7 +431,7 @@ class Parser:
         if self.py_version >= min_version:
             return node
         else:
-            self.raise_syntax_error_known_location(
+            self.raise_syntax_error_known_location_ast(
                 "%s is only supported in Python %s and above." % (error_msg, min_version),
                 node)
 
@@ -448,9 +448,9 @@ class Parser:
         try:
             node.set_context(self.space, context)
         except ast.UnacceptableExpressionContext as e:
-            self.raise_syntax_error_known_location(e.msg, e.node)
+            self.raise_syntax_error_known_location_ast(e.msg, e.node)
         except misc.ForbiddenNameAssignment as e:
-            self.raise_syntax_error_known_location("cannot assign to %s" % (e.name,), e.node)
+            self.raise_syntax_error_known_location_ast("cannot assign to %s" % (e.name,), e.node)
         return node
 
     def check_for_forbidden_assignment_target(self, name):
@@ -462,7 +462,7 @@ class Parser:
         try:
             misc.check_forbidden_name(self.space, id)
         except misc.ForbiddenNameAssignment as e:
-            self.raise_syntax_error_known_location(
+            self.raise_syntax_error_known_location_ast(
                 "cannot assign to %s" % (e.name,), name)
         return id
 
@@ -475,7 +475,7 @@ class Parser:
         d = {}
         for keyword in keywords:
             if keyword.arg in d:
-                self.raise_syntax_error_known_location(
+                self.raise_syntax_error_known_location_ast(
                     "keyword argument repeated: '%s'" % keyword.arg, keyword)
             d[keyword.arg] = None
         return keywords
@@ -599,9 +599,6 @@ class Parser:
             start[0], start[1], line, self.compile_info.filename, lastlineno=end[0]
         )
 
-    def raise_syntax_error(self, message):
-        self._raise_syntax_error(message)
-
     def raise_syntax_error_known_range(
         self,
         message,
@@ -635,19 +632,27 @@ class Parser:
     def raise_syntax_error(self, message):
         self._raise_syntax_error(message, None, None)
 
-    def raise_syntax_error_known_location(
+    def raise_syntax_error_known_location_ast(
             self,
             message,
             node,
         ):
         """Raise a syntax error that occured at a given AST node."""
-        if not isinstance(node, ast.AST):
-            start = node.lineno, node.column
-            end = node.end_lineno, node.end_column
-        else:
-            start = node.lineno, node.col_offset
-            end = node.end_lineno, node.end_col_offset
+        assert isinstance(node, ast.AST)
+        start = node.lineno, node.col_offset
+        end = node.end_lineno, node.end_col_offset
         self._raise_syntax_error(message, start, end)
+
+    def raise_syntax_error_known_location_tok(
+            self,
+            message,
+            node,
+        ):
+        """Raise a syntax error that occured at a given AST node."""
+        start = node.lineno, node.column
+        end = node.end_lineno, node.end_column
+        self._raise_syntax_error(message, start, end)
+
 
     def make_type_ignores(self):
         type_ignores = []
@@ -659,9 +664,9 @@ class Parser:
     def check_barry(self, tok):
         flufl = self.compile_info.flags & consts.CO_FUTURE_BARRY_AS_BDFL
         if flufl and tok.value == '!=':
-            self.raise_syntax_error_known_location("with Barry as BDFL, use '<>' instead of '!='", tok)
+            self.raise_syntax_error_known_location_tok("with Barry as BDFL, use '<>' instead of '!='", tok)
         elif not flufl and tok.value == '<>':
-            self.raise_syntax_error_known_location('invalid syntax', tok)
+            self.raise_syntax_error_known_location_tok('invalid syntax', tok)
         return tok
 
     def kwarg_illegal_assignment(self, a, b):
@@ -1835,7 +1840,7 @@ func_type_comment:
 # From here on, there are rules for invalid syntax with specialised error messages
 invalid_arguments[NoReturn]:
     | a=args ',' '*' {
-        self.raise_syntax_error_known_location(
+        self.raise_syntax_error_known_location_ast(
             "iterable argument unpacking follows keyword argument unpacking",
             a[1][-1] if a[1] else a[0][-1],
         )
@@ -1864,7 +1869,7 @@ invalid_arguments[NoReturn]:
         )
      }
     | a=args ',' args {
-        self.raise_syntax_error(
+        self.raise_syntax_error( # XXX looks wrong?
             "positional argument follows keyword argument unpacking"
             if a[1][-1].arg is None else
             "positional argument follows keyword argument",
@@ -1903,7 +1908,7 @@ invalid_expression[NoReturn]:
      }
 invalid_named_expression[NoReturn]:
     | a=expression ':=' expression {
-        self.raise_syntax_error_known_location(
+        self.raise_syntax_error_known_location_ast(
             "cannot use assignment expressions with %s" % (self.get_expr_name(a), ), a
         )
      }
@@ -1929,22 +1934,22 @@ invalid_named_expression[NoReturn]:
 
 invalid_assignment[NoReturn]:
     | a=invalid_ann_assign_target ':' expression {
-        self.raise_syntax_error_known_location(
+        self.raise_syntax_error_known_location_ast(
             "only single target (not %s) can be annotated" % (self.get_expr_name(a), ), a
         )
      }
     | a=star_named_expression ',' star_named_expressions* ':' expression {
-        self.raise_syntax_error_known_location("only single target (not tuple) can be annotated", a) }
+        self.raise_syntax_error_known_location_ast("only single target (not tuple) can be annotated", a) }
     | a=expression ':' expression {
-        self.raise_syntax_error_known_location("illegal target for annotation", a) }
+        self.raise_syntax_error_known_location_ast("illegal target for annotation", a) }
     | (star_targets '=')* a=star_expressions '=' {
-        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
+        self.raise_syntax_error_known_location_ast("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
     | (star_targets '=')* a=yield_expr '=' {
-        self.raise_syntax_error_known_location("assignment to yield expression not possible", a)
+        self.raise_syntax_error_known_location_ast("assignment to yield expression not possible", a)
      }
     | a=star_expressions augassign (yield_expr | star_expressions) {
-        self.raise_syntax_error_known_location(
+        self.raise_syntax_error_known_location_ast(
             "%s is an illegal expression for augmented assignment" % (self.get_expr_name(a), ), a
         )
      }
@@ -1954,13 +1959,13 @@ invalid_ann_assign_target[ast.AST]:
     | '(' a=invalid_ann_assign_target ')' { a }
 invalid_del_stmt[NoReturn]:
     | 'del' a=star_expressions {
-        self.raise_syntax_error_known_location("cannot delete %s" % (self.get_expr_name(a), ), a)
+        self.raise_syntax_error_known_location_ast("cannot delete %s" % (self.get_expr_name(a), ), a)
      }
 invalid_block[NoReturn]:
     | NEWLINE !INDENT { self.raise_indentation_error("expected an indented block") }
 invalid_comprehension[NoReturn]:
     | ('[' | '(' | '{') a=starred_expression for_if_clauses {
-        self.raise_syntax_error_known_location("iterable unpacking cannot be used in comprehension", a)
+        self.raise_syntax_error_known_location_ast("iterable unpacking cannot be used in comprehension", a)
      }
     | ('[' | '{') a=star_named_expression ',' b=star_named_expressions for_if_clauses {
         self.raise_syntax_error_known_range(
@@ -1974,25 +1979,25 @@ invalid_comprehension[NoReturn]:
      }
 invalid_dict_comprehension[NoReturn]:
     | '{' a='**' bitwise_or for_if_clauses '}' {
-        self.raise_syntax_error_known_location("dict unpacking cannot be used in dict comprehension", a)
+        self.raise_syntax_error_known_location_ast("dict unpacking cannot be used in dict comprehension", a)
      }
 invalid_parameters[NoReturn]:
     | param_no_default* invalid_parameters_helper a=param_no_default {
-        self.raise_syntax_error_known_location("non-default argument follows default argument", a)
+        self.raise_syntax_error_known_location_ast("non-default argument follows default argument", a)
      }
 invalid_parameters_helper: # This is only there to avoid type errors
     | a=slash_with_default { [a] }
     | a=param_with_default+
 invalid_lambda_parameters[NoReturn]:
     | lambda_param_no_default* invalid_lambda_parameters_helper a=lambda_param_no_default {
-        self.raise_syntax_error_known_location("non-default argument follows default argument", a)
+        self.raise_syntax_error_known_location_ast("non-default argument follows default argument", a)
      }
 invalid_lambda_parameters_helper[NoReturn]:
     | a=lambda_slash_with_default { [a] }
     | a=lambda_param_with_default+
 invalid_star_etc[NoReturn]:
     | a='*' (')' | ',' (')' | '**')) {
-        self.raise_syntax_error_known_location("named arguments must follow bare *", a)
+        self.raise_syntax_error_known_location_ast("named arguments must follow bare *", a)
      }
     | '*' ',' TYPE_COMMENT { self.raise_syntax_error("bare * has associated type comment") }
 invalid_lambda_star_etc[NoReturn]:
@@ -2005,24 +2010,24 @@ invalid_double_type_comments[NoReturn]:
      }
 invalid_with_item[NoReturn]:
     | expression 'as' a=expression &(',' | ')' | ':') {
-        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
+        self.raise_syntax_error_known_location_ast("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
 
 invalid_for_target[NoReturn]:
     | ASYNC? 'for' a=star_expressions {
-        self.raise_syntax_error_known_location("cannot assign to %s" % (self.get_expr_name(a), ), a)
+        self.raise_syntax_error_known_location_ast("cannot assign to %s" % (self.get_expr_name(a), ), a)
      }
 
 invalid_group[NoReturn]:
     | '(' a=starred_expression ')' {
-        self.raise_syntax_error_known_location("cannot use starred expression here", a)
+        self.raise_syntax_error_known_location_ast("cannot use starred expression here", a)
      }
     | '(' a='**' expression ')' {
-        self.raise_syntax_error_known_location("cannot use double starred expression here", a)
+        self.raise_syntax_error_known_location_ast("cannot use double starred expression here", a)
      }
 invalid_import_from_targets[NoReturn]:
     | import_from_as_names a=',' NEWLINE {
-        self.raise_syntax_error_known_location("trailing comma not allowed without surrounding parentheses", a)
+        self.raise_syntax_error_known_location_ast("trailing comma not allowed without surrounding parentheses", a)
      }
 
 invalid_with_stmt[None]:
@@ -2098,10 +2103,10 @@ invalid_case_block[NoReturn]:
      }
 invalid_as_pattern[NoReturn]:
     | or_pattern 'as' a="_" {
-        self.raise_syntax_error_known_location("cannot use '_' as a target", a)
+        self.raise_syntax_error_known_location_ast("cannot use '_' as a target", a)
      }
     | or_pattern 'as' !NAME a=expression {
-        self.raise_syntax_error_known_location("invalid pattern target", a)
+        self.raise_syntax_error_known_location_ast("invalid pattern target", a)
      }
 invalid_class_pattern[NoReturn]:
     | name_or_attr '(' a=invalid_class_argument_pattern  {
@@ -2163,7 +2168,7 @@ invalid_double_starred_kvpairs[None]:
         self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' &('}'|',') {
-        self.raise_syntax_error_known_location("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location_ast("expression expected after dictionary key and ':'", a)
      }
 invalid_kvpair[None]:
     | a=expression !(':') {
@@ -2177,5 +2182,5 @@ invalid_kvpair[None]:
         self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' {
-        self.raise_syntax_error_known_location("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location_ast("expression expected after dictionary key and ':'", a)
      }
