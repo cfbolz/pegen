@@ -440,7 +440,7 @@ class Parser:
 
     def raise_indentation_error(self, msg):
         """Raise an indentation error."""
-        raise IndentationError(msg)
+        self._raise_syntax_error(msg, cls=IndentationError)
 
     def get_expr_name(self, node):
         """Get a descriptive name for an expression."""
@@ -587,6 +587,7 @@ class Parser:
         message,
         start=None,
         end=None,
+        cls=SyntaxError,
     ):
         line_from_token = start is None and end is None
         if start is None or end is None:
@@ -602,9 +603,9 @@ class Parser:
                 self.get_lines(list(range(start[0], end[0] + 1)))
             )
 
-        raise SyntaxError(
+        raise cls(
             message,
-            start[0], start[1], line, self.compile_info.filename, lastlineno=end[0]
+            start[0], start[1] + 1, line, self.compile_info.filename, lastlineno=end[0]
         )
 
     def raise_syntax_error_known_range(
