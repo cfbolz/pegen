@@ -163,6 +163,27 @@ def memoize_left_rec(method):
     memoize_left_rec_wrapper.__wrapped__ = method  # type: ignore
     return memoize_left_rec_wrapper
 
+class FStringAstBuilder(object):
+    def __init__(self, space, parser, compile_info):
+        self.space = space
+        self.parser = parser
+        self.compile_info = compile_info
+
+    def recursive_parse_to_ast(self, str, info):
+        from pypy.interpreter.pyparser import pytokenizer as tokenize
+        tokenlist = tokenize.generate_tokens(str.splitlines(), 0)
+        parser = PythonParser(self.space, tokenlist, self.compile_info, verbose=False)
+        return parser.eval()
+
+    def check_feature(self, condition, version, msg, n):
+         if condition and self.compile_info.feature_version < version:
+            return self.error(msg, n)
+
+    def error_ast(self, msg, node):
+        self.parser.raise_syntax_error_known_location_ast(msg, node)
+
+    def error(self, msg, node):
+        self.parser.raise_syntax_error_known_location_ast(msg, node)
 
 class Parser:
     """Parsing base class."""
@@ -476,30 +497,10 @@ class Parser:
 
     def generate_ast_for_string(self, tokens):
         """Generate AST nodes for strings."""
-        # XXX very hacky, fix later!
         from pypy.interpreter.pyparser.parser import Nonterminal, Terminal
         from pypy.interpreter.astcompiler.fstring import string_parse_literal
-        origself = self
-        class FakeASTBuilder(object):
-            class compile_info(object):
-                encoding = "utf-8"
-                optimize = False
-                feature_version = self.py_version[1]
-            def recursive_parse_to_ast(self, str, info):
-                from pypy.interpreter.pyparser import pytokenizer as tokenize
-                tokenlist = tokenize.generate_tokens(str.splitlines(), 0)
-                parser = PythonParser(origself.space, tokenlist, origself.compile_info, verbose=False)
-                return parser.eval()
-            def check_feature(self, condition, version, msg, n):
-                 if condition and self.compile_info.feature_version < version:
-                    return self.error(msg, n)   
-            def error_ast(self, msg, node):
-                origself.raise_syntax_error_known_location(msg, node)
-            def error(self, msg, node):
-                origself.raise_syntax_error_known_location(msg, node)
-
-            space = self.space
-        return string_parse_literal(FakeASTBuilder(), Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
+        # bit of a hack, allow fstrings to keep using the old interface
+        return string_parse_literal(FStringAstBuilder(), Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
 
     def extract_import_level(self, tokens):
         """Extract the relative import level from the tokens preceding the module name.
