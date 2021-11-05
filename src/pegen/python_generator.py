@@ -335,11 +335,11 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
             if has_cut:
                 self.print("cut = False")
 
-            exprs, assingments = [], []
+            exprs, assignments = [], []
             for item in node.items:
                 assert isinstance(item, NamedItem)
-                assingment, expr = self.named_item_hack(item)
-                assingments.append(assingment)
+                assignment, expr = self.named_item_hack(item)
+                assignments.append(assignment)
                 if is_gather:
                     expr += " is not None"
                 exprs.append(expr)
@@ -348,21 +348,23 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
             if is_loop:
                 self.print("while True:")
                 with self.indent():
-                    for i in range(len(assingments)):
-                        if assingments[i].endswith(','): # Optional Rule
-                            self.print(assingments[i].rstrip(','))
+                    for assignment, expr in zip(assignments, exprs):
+                        if assignment.endswith(','): # Optional Rule
+                            self.print(assignment.rstrip(','))
                         else:
-                            self.print(assingments[i])
-                            self.print("if not " + exprs[i] + ":")
+                            if assignment:
+                                self.print(assignment)
+                            self.print("if not " + expr + ":")
                             with self.indent():
                                 self.print("break")
             else:
-                for i in range(len(assingments)):
-                    if assingments[i].endswith(','): # Optional Rule
-                        self.print(assingments[i].rstrip(','))
+                for assignment, expr in zip(assignments, exprs):
+                    if assignment.endswith(','): # Optional Rule
+                        self.print(assignment.rstrip(','))
                     else:
-                        self.print(assingments[i])
-                        self.print("if " + exprs[i] + ":")
+                        if assignment:
+                            self.print(assignment)
+                        self.print("if " + expr + ":")
                         self.level += 1
                 self.level -= 1
 
