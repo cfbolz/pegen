@@ -8,8 +8,9 @@ import os
 import sys
 
 from pypy.interpreter.pyparser.pygram import tokens
+from pypy.interpreter.pyparser.parser import Token
 from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
-from pypy.interpreter.pyparser.error import SyntaxError
+from pypy.interpreter.pyparser.error import SyntaxError, IndentationError
 
 from pypy.interpreter.astcompiler import ast
 from pypy.interpreter.astcompiler.astbuilder import parse_number
@@ -183,6 +184,8 @@ class FStringAstBuilder(object):
         self.parser.raise_syntax_error_known_location_ast(msg, node)
 
     def error(self, msg, node):
+        # XXX bit annoying
+        tok = Token(node.type, node.value, node.lineno, node.column, node.line, node.end_lineno, node.end_column)
         self.parser.raise_syntax_error_known_location_ast(msg, node)
 
 class Parser:
@@ -474,6 +477,9 @@ class Parser:
             return keywords
         d = {}
         for keyword in keywords:
+            if keyword.arg is None:
+                # **arg
+                continue
             if keyword.arg in d:
                 self.raise_syntax_error_known_location_ast(
                     "keyword argument repeated: '%s'" % keyword.arg, keyword)
@@ -500,7 +506,9 @@ class Parser:
         from pypy.interpreter.pyparser.parser import Nonterminal, Terminal
         from pypy.interpreter.astcompiler.fstring import string_parse_literal
         # bit of a hack, allow fstrings to keep using the old interface
-        return string_parse_literal(FStringAstBuilder(), Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
+        return string_parse_literal(
+            FStringAstBuilder(self.space, self, self.compile_info),
+            Nonterminal(None, -5, [Terminal.fromtoken(None, tok) for tok in tokens]))
 
     def extract_import_level(self, tokens):
         """Extract the relative import level from the tokens preceding the module name.
@@ -1997,7 +2005,7 @@ invalid_lambda_parameters_helper[NoReturn]:
     | a=lambda_param_with_default+
 invalid_star_etc[NoReturn]:
     | a='*' (')' | ',' (')' | '**')) {
-        self.raise_syntax_error_known_location_ast("named arguments must follow bare *", a)
+        self.raise_syntax_error_known_location_tok("named arguments must follow bare *", a)
      }
     | '*' ',' TYPE_COMMENT { self.raise_syntax_error("bare * has associated type comment") }
 invalid_lambda_star_etc[NoReturn]:
@@ -2023,11 +2031,11 @@ invalid_group[NoReturn]:
         self.raise_syntax_error_known_location_ast("cannot use starred expression here", a)
      }
     | '(' a='**' expression ')' {
-        self.raise_syntax_error_known_location_ast("cannot use double starred expression here", a)
+        self.raise_syntax_error_known_location_tok("cannot use double starred expression here", a)
      }
 invalid_import_from_targets[NoReturn]:
     | import_from_as_names a=',' NEWLINE {
-        self.raise_syntax_error_known_location_ast("trailing comma not allowed without surrounding parentheses", a)
+        self.raise_syntax_error_known_location_tok("trailing comma not allowed without surrounding parentheses", a)
      }
 
 invalid_with_stmt[None]:
@@ -2036,19 +2044,19 @@ invalid_with_stmt[None]:
 invalid_with_stmt_indent[NoReturn]:
     | [ASYNC] a='with' ','.(expression ['as' star_target])+ ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'with' statement on line {a.lineno}"
+            "expected an indented block after 'with' statement on line %s" % a.lineno
         )
      }
     | [ASYNC] a='with' '(' ','.(expressions ['as' star_target])+ ','? ')' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'with' statement on line {a.lineno}"
+            "expected an indented block after 'with' statement on line %s" % a.lineno
         )
      }
 
 invalid_try_stmt[NoReturn]:
     | a='try' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'try' statement on line {a.lineno}",
+            "expected an indented block after 'try' statement on line %s" % a.lineno
         )
      }
     | 'try' ':' block !('except' | 'finally') {
@@ -2063,18 +2071,18 @@ invalid_except_stmt[None]:
 invalid_finally_stmt[NoReturn]:
     | a='finally' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'finally' statement on line {a.lineno}"
+            "expected an indented block after 'finally' statement on line %s" % a.lineno
         )
      }
 invalid_except_stmt_indent[NoReturn]:
     | a='except' expression ['as' NAME ] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'except' statement on line {a.lineno}"
+            "expected an indented block after 'except' statement on line %s" % a.lineno
         )
      }
     | a='except' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'except' statement on line {a.lineno}"
+            "expected an indented block after 'except' statement on line %s" % a.lineno
         )
      }
 invalid_match_stmt[NoReturn]:
@@ -2090,7 +2098,7 @@ invalid_match_stmt[NoReturn]:
             (3, 10),
             "Pattern matching is",
             self.raise_indentation_error(
-                "expected an indented block after 'match' statement on line {a.lineno}"
+                "expected an indented block after 'match' statement on line %s" % a.lineno
             )
         )
      }
@@ -2098,12 +2106,12 @@ invalid_case_block[NoReturn]:
     | "case" patterns guard? !':' { self.raise_syntax_error("expected ':'") }
     | a="case" patterns guard? ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'case' statement on line {a.lineno}"
+            "expected an indented block after 'case' statement on line %s" % a.lineno
         )
      }
 invalid_as_pattern[NoReturn]:
     | or_pattern 'as' a="_" {
-        self.raise_syntax_error_known_location_ast("cannot use '_' as a target", a)
+        self.raise_syntax_error_known_location_tok("cannot use '_' as a target", a)
      }
     | or_pattern 'as' !NAME a=expression {
         self.raise_syntax_error_known_location_ast("invalid pattern target", a)
@@ -2120,45 +2128,45 @@ invalid_if_stmt[NoReturn]:
     | 'if' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='if' a=named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'if' statement on line {a.lineno}"
+            "expected an indented block after 'if' statement on line %s" % a.lineno
         )
      }
 invalid_elif_stmt[NoReturn]:
     | 'elif' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='elif' named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'elif' statement on line {a.lineno}"
+            "expected an indented block after 'elif' statement on line %s" % a.lineno
         )
      }
 invalid_else_stmt[NoReturn]:
     | a='else' ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'else' statement on line {a.lineno}"
+            "expected an indented block after 'else' statement on line %s" % a.lineno
         )
      }
 invalid_while_stmt[NoReturn]:
     | 'while' named_expression NEWLINE { self.raise_syntax_error("expected ':'") }
     | a='while' named_expression ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'while' statement on line {a.lineno}"
+            "expected an indented block after 'while' statement on line %s" % a.lineno
         )
      }
 invalid_for_stmt[NoReturn]:
     | [ASYNC] a='for' star_targets 'in' star_expressions ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after 'for' statement on line {a.lineno}"
+            "expected an indented block after 'for' statement on line %s" % a.lineno
         )
      }
 invalid_def_raw[NoReturn]:
     | [ASYNC] a='def' NAME '(' [params] ')' ['->' expression] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after function definition on line {a.lineno}"
+            "expected an indented block after function definition on line %s" % a.lineno
         )
      }
 invalid_class_def_raw[NoReturn]:
     | a='class' NAME ['(' [arguments] ')'] ':' NEWLINE !INDENT {
         self.raise_indentation_error(
-            "expected an indented block after class definition on line {a.lineno}"
+            "expected an indented block after class definition on line %s" % a.lineno
         )
      }
 
@@ -2168,7 +2176,7 @@ invalid_double_starred_kvpairs[None]:
         self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' &('}'|',') {
-        self.raise_syntax_error_known_location_ast("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location_tok("expression expected after dictionary key and ':'", a)
      }
 invalid_kvpair[None]:
     | a=expression !(':') {
@@ -2182,5 +2190,5 @@ invalid_kvpair[None]:
         self.raise_syntax_error_starting_from("cannot use a starred expression in a dictionary value", a)
      }
     | expression a=':' {
-        self.raise_syntax_error_known_location_ast("expression expected after dictionary key and ':'", a)
+        self.raise_syntax_error_known_location_tok("expression expected after dictionary key and ':'", a)
      }
