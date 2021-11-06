@@ -461,6 +461,7 @@ class Parser:
         self._reset(mark)
         return not ok
 
+    @specialize.argtype(3)
     def check_version(self, min_version, error_msg, node):
         """Check that the python version is high enough for a rule to apply.
 
@@ -470,9 +471,8 @@ class Parser:
                 self.py_version[1] >= min_version[1])):
             return node
         else:
-            self.raise_syntax_error_known_location(
-                "%s is only supported in Python %s and above." % (error_msg, min_version),
-                node)
+            self.raise_syntax_error(
+                "%s is only supported in Python %s and above." % (error_msg, min_version))
 
     def raise_indentation_error(self, msg):
         """Raise an indentation error."""
@@ -872,7 +872,7 @@ augassign: # rpython hack: to make the numbers compatible with None, wrap in a l
     | '+=' { [ast.Add] }
     | '-=' { [ast.Sub] }
     | '*=' { [ast.Mult] }
-    | '@=' { [self.check_version((3, 5), "The '@' operator is", ast.MatMult)] }
+    | '@=' { self.check_version((3, 5), "The '@' operator is", [ast.MatMult]) }
     | '/=' { [ast.Div] }
     | '%=' { [ast.Mod] }
     | '&=' { [ast.BitAnd] }
