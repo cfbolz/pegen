@@ -2278,7 +2278,7 @@ invalid_kvpair[None]:
         self._raise_syntax_error(
             "':' expected after dictionary key",
             a.lineno, a.col_offset - 1,
-            a.end_lineno, a.end_col_offset, -1
+            a.end_lineno, a.end_col_offset - 1,
         )
      }
     | expression ':' a='*' bitwise_or {
