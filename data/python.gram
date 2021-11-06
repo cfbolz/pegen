@@ -21,17 +21,16 @@ Load = ast.Load
 Store = ast.Store
 Del = ast.Del
 
-class MemoEntry(object):
-    def __init__(self, methodname, tree, endmark, next):
-        self.methodname = methodname
-        self.tree = tree
+class BaseMemoEntry(object):
+    _attrs_ = ['endmark', 'next']
+    def __init__(self, endmark, next):
         self.endmark = endmark
         self.next = next
 
-def find_memo(tok, methodname):
+def find_memo(tok, cls):
     memo = tok.memo
     while memo:
-        if memo.methodname == methodname:
+        if type(memo) is cls:
             return memo
         memo = memo.next
     return None
@@ -49,16 +48,27 @@ def log_end(self, method_name, result):
     fill = "  " * self._level
     print "%s... %s(%s) --> %s" % (fill, method_name, result)
 
+def make_memo_class(method_name):
+    class MemoEntry(BaseMemoEntry):
+        _attrs_ = ['tree']
+        def __init__(self, tree, endmark, next):
+            BaseMemoEntry.__init__(self, endmark, next)
+            self.tree = tree
+    MemoEntry.__name__ += "_" + "method_name"
+    return MemoEntry
 
 def memoize(method):
     """Memoize a symbol method."""
     method_name = method.__name__
+    MemoEntry = make_memo_class(method_name)
 
     def memoize_wrapper(self):
         tok = self.peek()
-        memo = find_memo(tok, method_name)
+        memo = find_memo(tok, MemoEntry)
         # Fast path: cache hit, and not verbose.
+        fill = ''
         if memo:
+            assert isinstance(memo, MemoEntry)
             self._reset(memo.endmark)
             return memo.tree
         # Slow path: no cache hit, or verbose.
@@ -72,7 +82,7 @@ def memoize(method):
             self._level -= 1
             print "%s... %s() --> %s" % (fill, method_name, tree)
         endmark = self._mark()
-        tok.memo = MemoEntry(method_name, tree, endmark, tok.memo)
+        tok.memo = MemoEntry(tree, endmark, tok.memo)
         return tree
 
     memoize_wrapper.__wrapped__ = method  # type: ignore
@@ -82,13 +92,15 @@ def memoize(method):
 def memoize_left_rec(method):
     """Memoize a left-recursive symbol method."""
     method_name = method.__name__
+    MemoEntry = make_memo_class(method_name)
 
     def memoize_left_rec_wrapper(self):
         mark = self._mark()
         tok = self.peek()
-        memo = find_memo(tok, method_name)
+        memo = find_memo(tok, MemoEntry)
         # Fast path: cache hit
         if memo:
+            assert isinstance(memo, MemoEntry)
             self._reset(memo.endmark)
             return memo.tree
         fill = "  " * self._level
@@ -107,7 +119,7 @@ def memoize_left_rec(method):
         # (http://web.cs.ucla.edu/~todd/research/pub.php?id=pepm08).
 
         # Prime the cache with a failure.
-        memo = tok.memo = MemoEntry(method_name, None, mark, tok.memo)
+        memo = tok.memo = MemoEntry(None, mark, tok.memo)
         lastresult, lastmark = None, mark
         depth = 0
         if verbose:
@@ -283,6 +295,7 @@ class Parser:
         return self._tokens[self._highwatermark]
 
     def get_last_non_whitespace_token(self):
+        tok = self._tokens[0]
         for tok in reversed(self._tokens[: self._index]):
             if tok.token_type != tokens.ENDMARKER and (
                 tok.token_type < tokens.NEWLINE or tok.token_type > tokens.DEDENT
