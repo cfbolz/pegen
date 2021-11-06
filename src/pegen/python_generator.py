@@ -380,7 +380,7 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                         elif len(self.local_variable_names) == 1:
                             action = f"{self.local_variable_names[0]}"
                         else:
-                            action = f"self.dummy_name({', '.join(self.local_variable_names)})"
+                            action = f"self.dummy_name()" # {', '.join(self.local_variable_names)})"
                 elif "LOCATIONS" in action:
                     self.print("tok = self.get_last_non_whitespace_token()")
                     self.print("end_lineno, end_col_offset = tok.end_lineno, tok.end_column")
