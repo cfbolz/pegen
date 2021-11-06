@@ -550,6 +550,16 @@ class Parser:
             arg.type_comment = type_comment
         return arg
 
+    def dummy_name(self, *args):
+        return ast.Name(
+                id="dummy%s" % (len(args), ),
+                ctx=Load,
+                lineno=1,
+                col_offset=0,
+                end_lineno=1,
+                end_col_offset=0,
+            )
+
     def make_arguments(self,
         pos_only,
         pos_only_with_default,
