@@ -217,6 +217,15 @@ class SlashWithDefault(object):
         self.plain_names = plain_names
         self.names_with_defaults = names_with_defaults
 
+class DictDisplaysEntry(object):
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+
+class CmpopExprPair(object):
+    def __init__(self, cmpop, expr):
+        self.cmpop = cmpop
+        self.expr = expr
 
 class Parser:
     """Parsing base class."""
@@ -581,10 +590,10 @@ class Parser:
         return target
 
     def get_comparison_ops(self, pairs):
-        return [op for op, _ in pairs]
+        return [p.cmpop for p in pairs]
 
     def get_comparators(self, pairs):
-        return [comp for _, comp in pairs]
+        return [p.expr for p in pairs]
 
     def set_arg_type_comment(self, arg, type_comment):
         if type_comment:
@@ -600,6 +609,12 @@ class Parser:
 
     def make_slash_with_default(self, plain_names, names_with_default):
         return SlashWithDefault(plain_names, names_with_default)
+
+    def dict_display_entry(self, key, value):
+        return DictDisplaysEntry(key, value)
+
+    def cmpop_expr_pair(self, cmpop, expr):
+        return CmpopExprPair(cmpop, expr)
 
     def dummy_name(self, *args):
         return ast.Name(
@@ -730,7 +745,7 @@ class Parser:
     def raise_syntax_error_starting_from(
         self,
         message,
-        start_node,
+        start_node_or_tok,
     ):
         start_lineno, start_col_offset = self.extract_pos_start(start_node_or_tok)
         self._raise_syntax_error(message, start_lineno, start_col_offset, -1, -1)
@@ -1102,7 +1117,7 @@ param_no_default[ast.arg]:
 param_with_default[NameDefaultPair]:
     | a=param c=default ',' tc=TYPE_COMMENT? { self.name_default_pair(a, c, tc) }
     | a=param c=default tc=TYPE_COMMENT? &')' { self.name_default_pair(a, c, tc) }
-param_maybe_default[Tuple[ast.arg, Any]]:
+param_maybe_default[NameDefaultPair]:
     | a=param c=default? ',' tc=TYPE_COMMENT? { self.name_default_pair(a, c, tc) }
     | a=param c=default? tc=TYPE_COMMENT? &')' { self.name_default_pair(a, c, tc) }
 param[ast.arg]: a=NAME b=annotation? { ast.arg(arg=self.check_for_forbidden_assignment_target(a), annotation=b, type_comment=None, LOCATIONS) }
@@ -1524,17 +1539,17 @@ compare_op_bitwise_or_pair:
     | isnot_bitwise_or
     | is_bitwise_or
 
-eq_bitwise_or: '==' a=bitwise_or { (ast.Eq, a) }
-noteq_bitwise_or[tuple]:
-    | tok='!=' a=bitwise_or { self.check_barry(tok) and (ast.NotEq, a) }
-lte_bitwise_or: '<=' a=bitwise_or { (ast.LtE, a) }
-lt_bitwise_or: '<' a=bitwise_or { (ast.Lt, a) }
-gte_bitwise_or: '>=' a=bitwise_or { (ast.GtE, a) }
-gt_bitwise_or: '>' a=bitwise_or { (ast.Gt, a) }
-notin_bitwise_or: 'not' 'in' a=bitwise_or { (ast.NotIn, a) }
-in_bitwise_or: 'in' a=bitwise_or { (ast.In, a) }
-isnot_bitwise_or: 'is' 'not' a=bitwise_or { (ast.IsNot, a) }
-is_bitwise_or: 'is' a=bitwise_or { (ast.Is, a) }
+eq_bitwise_or: '==' a=bitwise_or { self.cmpop_expr_pair(ast.Eq, a) }
+noteq_bitwise_or:
+    | tok='!=' a=bitwise_or { self.check_barry(tok) and self.cmpop_expr_pair(ast.NotEq, a) }
+lte_bitwise_or: '<=' a=bitwise_or { self.cmpop_expr_pair(ast.LtE, a) }
+lt_bitwise_or: '<' a=bitwise_or { self.cmpop_expr_pair(ast.Lt, a) }
+gte_bitwise_or: '>=' a=bitwise_or { self.cmpop_expr_pair(ast.GtE, a) }
+gt_bitwise_or: '>' a=bitwise_or { self.cmpop_expr_pair(ast.Gt, a) }
+notin_bitwise_or: 'not' 'in' a=bitwise_or { self.cmpop_expr_pair(ast.NotIn, a) }
+in_bitwise_or: 'in' a=bitwise_or { self.cmpop_expr_pair(ast.In, a) }
+isnot_bitwise_or: 'is' 'not' a=bitwise_or { self.cmpop_expr_pair(ast.IsNot, a) }
+is_bitwise_or: 'is' a=bitwise_or { self.cmpop_expr_pair(ast.Is, a) }
 
 # Logical operators
 # -----------------
@@ -1731,17 +1746,17 @@ set[ast.Set]: '{' a=star_named_expressions '}' { ast.Set(elts=a, LOCATIONS) }
 
 dict[ast.Dict]:
     | '{' a=[double_starred_kvpairs] '}' {
-        ast.Dict(keys=[kv[0] for kv in a] if a else None, values=[kv[1] for kv in a] if a else None, LOCATIONS)
+        ast.Dict(keys=[kv.key for kv in a] if a else None, values=[kv.value for kv in a] if a else None, LOCATIONS)
      }
     | '{' invalid_double_starred_kvpairs '}'
 
 double_starred_kvpairs[list]: a=','.double_starred_kvpair+ [','] { a }
 
 double_starred_kvpair:
-    | '**' a=bitwise_or { (None, a) }
+    | '**' a=bitwise_or { self.dict_display_entry(None, a) }
     | kvpair
 
-kvpair[tuple]: a=expression ':' b=expression { (a, b) }
+kvpair[tuple]: a=expression ':' b=expression { self.dict_display_entry(a, b) }
 
 # Comprehensions & Generators
 # ---------------------------
