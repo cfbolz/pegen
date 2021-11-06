@@ -1171,7 +1171,7 @@ with_stmt[Union[ast.With, ast.AsyncWith]]:
         self.check_version(
            (3, 9),
            "Parenthesized with items",
-            ast.With(items=a, body=b, LOCATIONS)
+            ast.With(items=a, body=b, type_comment=None, LOCATIONS)
         )
      }
     | 'with' a=','.with_item+ ':' tc=[TYPE_COMMENT] b=block {
@@ -1181,7 +1181,7 @@ with_stmt[Union[ast.With, ast.AsyncWith]]:
        self.check_version(
            (3, 9),
            "Parenthesized with items",
-           ast.AsyncWith(items=a, body=b, LOCATIONS)
+           ast.AsyncWith(items=a, body=b, type_comment=None, LOCATIONS)
         )
      }
     | ASYNC 'with' a=','.with_item+ ':' tc=[TYPE_COMMENT] b=block {
