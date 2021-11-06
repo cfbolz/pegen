@@ -565,7 +565,12 @@ class Parser:
         decorators
     ):
         """Set the decorators on a function or class definition."""
-        target.decorator_list = decorators
+        # for rpython
+        if isinstance(target, ast.FunctionDef):
+            target.decorator_list = decorators
+        else:
+            assert isinstance(target, ast.ClassDef)
+            target.decorator_list = decorators
         return target
 
     def get_comparison_ops(self, pairs):
