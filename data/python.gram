@@ -186,6 +186,11 @@ class FStringAstBuilder(ASTBuilder):
 
     def error(self, msg, node):
         # XXX bit annoying
+        from pypy.interpreter.pyparser.parser import Nonterminal, Terminal
+        if isinstance(node, Terminal):
+            pass
+        else:
+            node = node.flatten()[0]
         tok = Token(node.type, node.value, node.lineno, node.column, node.line, node.end_lineno, node.end_column)
         self.parser.raise_syntax_error_known_location(msg, tok)
 
