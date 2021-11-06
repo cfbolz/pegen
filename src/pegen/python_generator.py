@@ -362,8 +362,9 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                     else:
                         if assignment:
                             self.print(assignment)
-                        self.print("if " + expr + ":")
-                        self.level += 1
+                        if assignment != "cut = True":
+                            self.print("if " + expr + ":")
+                            self.level += 1
                 self.level -= 1
 
             with self.indent():
