@@ -520,9 +520,9 @@ class Parser:
         return id
 
     def check_repeated_keywords(self, args):
-        if not args or not args[1]:
+        if not args or not args.keywords:
             return None
-        keywords = args[1]
+        keywords = args.keywords
         if len(keywords) == 1:
             return keywords
         d = {}
@@ -988,7 +988,7 @@ decorator:
      }
 dec_maybe_call:
     | dn=dec_primary '(' z=[arguments] ')' {
-        ast.Call(func=dn, args=z[0] if z and z[0] else None, keywords=self.check_repeated_keywords(z), LOCATIONS)
+        ast.Call(func=dn, args=z.args if z and z.args else None, keywords=self.check_repeated_keywords(z), LOCATIONS)
      }
     | dec_primary
 dec_primary:
@@ -1007,8 +1007,8 @@ class_def_raw[ast.ClassDef]:
     | 'class' a=NAME b=['(' z=[arguments] ')' { z }] &&':' c=block {
         ast.ClassDef(
             self.check_for_forbidden_assignment_target(a),
-            bases=b[0] if b else None,
-            keywords=b[1] if b else None,
+            bases=b.args if b else None,
+            keywords=b.keywords if b else None,
             body=c,
             decorator_list=None,
             LOCATIONS,
@@ -1614,7 +1614,7 @@ primary:
     | a=primary '(' b=[arguments] ')' {
         ast.Call(
             func=a,
-            args=b[0] if b and b[0] else None,
+            args=b.args if b and b.args else None,
             keywords=self.check_repeated_keywords(b),
             LOCATIONS,
         )
@@ -1756,7 +1756,7 @@ double_starred_kvpair:
     | '**' a=bitwise_or { self.dict_display_entry(None, a) }
     | kvpair
 
-kvpair[tuple]: a=expression ':' b=expression { self.dict_display_entry(a, b) }
+kvpair: a=expression ':' b=expression { self.dict_display_entry(a, b) }
 
 # Comprehensions & Generators
 # ---------------------------
@@ -1791,25 +1791,32 @@ genexp[ast.GeneratorExp]:
     | invalid_comprehension
 
 dictcomp[ast.DictComp]:
-    | '{' a=kvpair b=for_if_clauses '}' { ast.DictComp(key=a[0], value=a[1], generators=b, LOCATIONS) }
+    | '{' a=kvpair b=for_if_clauses '}' { ast.DictComp(key=a.key, value=a.value, generators=b, LOCATIONS) }
     | invalid_dict_comprehension
 
 # FUNCTION CALL ARGUMENTS
 # =======================
 
-arguments[Tuple[list, list]] (memo):
+arguments[ast.Call] (memo):
     | a=args [','] &')' { a }
     | invalid_arguments
 
-args[Tuple[list, list]]:
+args[ast.Call]:
     | a=','.(starred_expression | ( assignment_expression | expression !':=') !'=')+ b=[',' k=kwargs {k}] {
-        (a + ([e for e in b if isinstance(e, ast.Starred)] if b else []),
-         ([e for e in b if not isinstance(e, ast.Starred)] if b else [])
+        ast.Call(
+            "dummy",
+            a + ([e for e in b if isinstance(e, ast.Starred)] if b else []),
+            ([e for e in b if not isinstance(e, ast.Starred)] if b else []),
+            LOCATIONS
         )
      }
     | a=kwargs {
-        ([e for e in a if isinstance(e, ast.Starred)],
-         [e for e in a if not isinstance(e, ast.Starred)])
+        ast.Call(
+            "dummy",
+            [e for e in a if isinstance(e, ast.Starred)],
+            [e for e in a if not isinstance(e, ast.Starred)],
+            LOCATIONS
+        )
     }
 
 kwargs[list]:
@@ -1883,7 +1890,7 @@ t_primary:
     | a=t_primary '(' b=[arguments] ')' &t_lookahead {
         ast.Call(
             func=a,
-            args=b[0] if b else None,
+            args=b.args if b else None,
             keywords=self.check_repeated_keywords(b),
             LOCATIONS,
         )
