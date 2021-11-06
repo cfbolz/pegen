@@ -807,26 +807,26 @@ assignment:
          ast.Assign(targets=a, value=b, type_comment=tc, LOCATIONS)
      }
     | a=single_target b=augassign ~ c=(yield_expr | star_expressions) {
-        ast.AugAssign(target = a, op=b, value=c, LOCATIONS)
+        ast.AugAssign(target = a, op=b[0], value=c, LOCATIONS)
      }
     | invalid_assignment
 
 annotated_rhs: yield_expr | star_expressions
 
-augassign:
-    | '+=' { ast.Add }
-    | '-=' { ast.Sub }
-    | '*=' { ast.Mult }
-    | '@=' { self.check_version((3, 5), "The '@' operator is", ast.MatMult) }
-    | '/=' { ast.Div }
-    | '%=' { ast.Mod }
-    | '&=' { ast.BitAnd }
-    | '|=' { ast.BitOr }
-    | '^=' { ast.BitXor }
-    | '<<=' { ast.LShift }
-    | '>>=' { ast.RShift }
-    | '**=' { ast.Pow }
-    | '//=' { ast.FloorDiv }
+augassign: # rpython hack: to make the numbers compatible with None, wrap in a list
+    | '+=' { [ast.Add] }
+    | '-=' { [ast.Sub] }
+    | '*=' { [ast.Mult] }
+    | '@=' { [self.check_version((3, 5), "The '@' operator is", ast.MatMult)] }
+    | '/=' { [ast.Div] }
+    | '%=' { [ast.Mod] }
+    | '&=' { [ast.BitAnd] }
+    | '|=' { [ast.BitOr] }
+    | '^=' { [ast.BitXor] }
+    | '<<=' { [ast.LShift] }
+    | '>>=' { [ast.RShift] }
+    | '**=' { [ast.Pow] }
+    | '//=' { [ast.FloorDiv] }
 
 return_stmt[ast.Return]:
     | 'return' a=[star_expressions] { ast.Return(value=a, LOCATIONS) }
