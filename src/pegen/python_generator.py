@@ -290,10 +290,8 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                 self.print("children = []")
             self.visit(rhs, is_loop=is_loop, is_gather=is_gather)
             if is_loop:
-                self.print(f"if self._verbose: log_end(self, {node.name}, children)")
                 self.print("return children")
             else:
-                self.print(f"if self._verbose: log_end(self, {node.name}, None)")
                 self.print("return None")
 
     def visit_NamedItem(self, node: NamedItem) -> None:
@@ -395,13 +393,8 @@ class PythonParserGenerator(ParserGenerator, GrammarVisitor):
                     if "UNREACHABLE" in action:
                         action = action.replace("UNREACHABLE", self.unreachable_formatting)
                         self.print("assert 0, 'unreachable'")
-                    elif action.isidentifier():
-                        self.print(f"if self._verbose: log_end(self, {self.method_name!r}, {action})")
-                        self.print(f"return {action}")
                     else:
-                        self.print(f"tree = {action}")
-                        self.print(f"if self._verbose: log_end(self, {self.method_name}, tree)")
-                        self.print("return tree")
+                        self.print(f"return {action}")
 
             self.level = old_level
             self.print("self._index = mark") # XXX verbose
