@@ -568,6 +568,8 @@ class Parser:
         # for rpython
         if isinstance(target, ast.FunctionDef):
             target.decorator_list = decorators
+        elif isinstance(target, ast.AsyncFunctionDef):
+            target.decorator_list = decorators
         else:
             assert isinstance(target, ast.ClassDef)
             target.decorator_list = decorators
