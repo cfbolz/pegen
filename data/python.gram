@@ -602,27 +602,32 @@ class Parser:
     def _raise_syntax_error(
         self,
         message,
-        start=None,
-        end=None,
+        start_lineno=-1,
+        start_col_offset=-1,
+        end_lineno=-1,
+        end_col_offset=-1,
         cls=SyntaxError,
     ):
-        line_from_token = start is None and end is None
-        if start is None or end is None:
-            tok = self.diagnose()
-            start = start or (tok.lineno, tok.column)
-            end = end or (tok.end_lineno, tok.end_column)
+        line_from_token = start_lineno == -1 and end_lineno == -1
+        tok = self.diagnose()
+        if start_lineno == -1:
+            start_lineno = tok.lineno
+            start_col_offset = tok.column
+        if end_lineno == -1:
+            end_lineno = tok.end_lineno
+            end_column = tok.end_column
 
         if line_from_token:
             line = tok.line
         else:
             # End is used only to get the proper text
             line = "".join(
-                self.get_lines(list(range(start[0], end[0] + 1)))
+                self.get_lines(list(range(start_lineno, end_lineno + 1)))
             )
 
         raise cls(
             message,
-            start[0], start[1] + 1, line, self.compile_info.filename, lastlineno=end[0]
+            start_lineno, start_col_offset + 1, line, self.compile_info.filename, lastlineno=end_lineno
         )
 
     def raise_syntax_error_known_range(
@@ -632,16 +637,16 @@ class Parser:
         end_node,
     ):
         if not isinstance(start_node, ast.AST):
-            start = start_node.lineno, start_node.col_offset
+            start_lineno, start_col_offset = start_node.lineno, start_node.col_offset
         else:
-            start = start_node.lineno, start_node.col_offset
+            start_lineno, start_col_offset = start_node.lineno, start_node.col_offset
 
         if not isinstance(end_node, ast.AST):
-            end = end_node.end_lineno, end_node.end_column
+            end_lineno, end_col_offset = end_node.end_lineno, end_node.end_column
         else:
-            end = end_node.end_lineno, end_node.end_col_offset
+            end_lineno, end_col_offset = end_node.end_lineno, end_node.end_col_offset
 
-        self._raise_syntax_error(message, start, end)
+        self._raise_syntax_error(message, start_lineno, start_col_offset, end_lineno, end_col_offset)
 
     def raise_syntax_error_starting_from(
         self,
@@ -649,14 +654,14 @@ class Parser:
         start_node,
     ):
         if not isinstance(start_node, ast.AST):
-            start = start_node.lineno, start_node.col_offset
+            start_lineno, start_col_offset = start_node.lineno, start_node.col_offset
         else:
-            start = start_node.lineno, start_node.col_offset
+            start_lineno, start_col_offset = start_node.lineno, start_node.col_offset
 
-        self._raise_syntax_error(message, start, None)
+        self._raise_syntax_error(message, start_lineno, start_col_offset, -1, -1)
 
     def raise_syntax_error(self, message):
-        self._raise_syntax_error(message, None, None)
+        self._raise_syntax_error(message)
 
     def raise_syntax_error_known_location_ast(
             self,
@@ -665,9 +670,9 @@ class Parser:
         ):
         """Raise a syntax error that occured at a given AST node."""
         assert isinstance(node, ast.AST)
-        start = node.lineno, node.col_offset
-        end = node.end_lineno, node.end_col_offset
-        self._raise_syntax_error(message, start, end)
+        start_lineno, start_col_offset = node.lineno, node.col_offset
+        end_lineno, end_col_offset = node.end_lineno, node.end_col_offset
+        self._raise_syntax_error(message, start_lineno, start_col_offset, end_lineno, end_col_offset)
 
     def raise_syntax_error_known_location_tok(
             self,
@@ -675,9 +680,9 @@ class Parser:
             node,
         ):
         """Raise a syntax error that occured at a given AST node."""
-        start = node.lineno, node.column
-        end = node.end_lineno, node.end_column
-        self._raise_syntax_error(message, start, end)
+        start_lineno, start_col_offset = node.lineno, node.column
+        end_lineno, end_col_offset = node.end_lineno, node.end_column
+        self._raise_syntax_error(message, start_lineno, start_col_offset, end_lineno, end_col_offset)
 
 
     def make_type_ignores(self):
@@ -2200,8 +2205,8 @@ invalid_kvpair[None]:
     | a=expression !(':') {
         self._raise_syntax_error(
             "':' expected after dictionary key",
-            (a.lineno, a.col_offset - 1),
-            (a.end_lineno, a.end_col_offset, -1)
+            a.lineno, a.col_offset - 1,
+            a.end_lineno, a.end_col_offset, -1
         )
      }
     | expression ':' a='*' bitwise_or {
