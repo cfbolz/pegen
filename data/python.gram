@@ -397,7 +397,15 @@ class Parser:
     def soft_keyword(self):
         tok = self.peek()
         if tok.token_type == tokens.NAME and tok.value in self.SOFT_KEYWORDS:
-            return self.getnext()
+            self.getnext()
+            return ast.Name(
+                    id=self.new_identifier(tok.value),
+                    ctx=Load,
+                    lineno=tok.lineno,
+                    col_offset=tok.column,
+                    end_lineno=tok.end_lineno,
+                    end_col_offset=tok.end_column,
+                )
         return None
 
     def expect(self, type):
