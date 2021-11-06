@@ -726,6 +726,7 @@ class Parser:
     def raise_syntax_error(self, message):
         self._raise_syntax_error(message)
 
+    @specialize.argtype(2)
     def raise_syntax_error_known_location(
             self,
             message,
