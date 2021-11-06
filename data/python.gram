@@ -13,7 +13,7 @@ from pypy.interpreter.pyparser import pytokenizer as tokenize, pytoken
 from pypy.interpreter.pyparser.error import SyntaxError, IndentationError
 
 from pypy.interpreter.astcompiler import ast
-from pypy.interpreter.astcompiler.astbuilder import parse_number
+from pypy.interpreter.astcompiler.astbuilder import parse_number, ASTBuilder
 from pypy.interpreter.astcompiler import asthelpers # Side effects
 from pypy.interpreter.astcompiler import consts, misc
 
@@ -165,7 +165,7 @@ def memoize_left_rec(method):
     memoize_left_rec_wrapper.__wrapped__ = method  # type: ignore
     return memoize_left_rec_wrapper
 
-class FStringAstBuilder(object):
+class FStringAstBuilder(ASTBuilder):
     def __init__(self, space, parser, compile_info):
         self.space = space
         self.parser = parser
