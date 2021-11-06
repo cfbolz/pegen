@@ -440,10 +440,12 @@ class Parser:
         """Check that the python version is high enough for a rule to apply.
 
         """
-        if self.py_version >= min_version:
+        if (self.py_version[0] >= min_version[0] or
+            (self.py_version[0] == self.min_version[0] and
+                self.py_version[1] >= min_version[1])):
             return node
         else:
-            self.raise_syntax_error_known_location_ast(
+            self.raise_syntax_error_known_location(
                 "%s is only supported in Python %s and above." % (error_msg, min_version),
                 node)
 
@@ -548,7 +550,7 @@ class Parser:
         return [comp for _, comp in pairs]
 
     def set_arg_type_comment(self, arg, type_comment):
-        if type_comment or self.py_version < (3, 9):
+        if type_comment:
             arg.type_comment = type_comment
         return arg
 
@@ -1541,12 +1543,6 @@ slices:
     | a=slice !',' { a }
     | a=','.slice+ [','] {
         ast.Tuple(elts=a, ctx=Load, LOCATIONS)
-        if self.py_version >= (3, 9) else
-        (
-            ast.ExtSlice(dims=a, LOCATIONS)
-            if any(isinstance(e, ast.Slice) for e in a) else
-            ast.Index(value=ast.Tuple(elts=[e.value for e in a], ctx=Load, LOCATIONS), LOCATIONS)
-        )
      }
 
 slice:
@@ -1555,14 +1551,6 @@ slice:
      }
     | a=named_expression {
         a
-        if self.py_version >= (3, 9) or isinstance(a, ast.Slice) else
-        ast.Index(
-            value=a,
-            lineno=a.lineno,
-            col_offset=a.col_offset,
-            end_lineno=a.end_lineno,
-            end_col_offset=a.end_col_offset
-        )
      }
 
 atom:
