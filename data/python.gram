@@ -527,6 +527,7 @@ class Parser:
             return keywords
         d = {}
         for keyword in keywords:
+            assert isinstance(keyword, ast.keyword)
             if keyword.arg is None:
                 # **arg
                 continue
@@ -535,6 +536,20 @@ class Parser:
                     "keyword argument repeated: '%s'" % keyword.arg, keyword)
             d[keyword.arg] = None
         return keywords
+
+    def get_last_target(self, for_if_clauses):
+        if not for_if_clauses:
+            return None
+        last = for_if_clauses[-1]
+        assert isinstance(last, ast.comprehension)
+        return last.target
+
+    def check_last_keyword_no_arg(self, args):
+        if not args.keywords:
+            return False
+        kw = args.keywords[-1]
+        assert isinstance(kw, ast.keyword)
+        return kw.arg is None
 
     def new_identifier(self, name):
         return misc.new_identifier(self.space, name)
@@ -1804,17 +1819,17 @@ arguments[ast.Call] (memo):
 args[ast.Call]:
     | a=','.(starred_expression | ( assignment_expression | expression !':=') !'=')+ b=[',' k=kwargs {k}] {
         ast.Call(
-            "dummy",
-            a + ([e for e in b if isinstance(e, ast.Starred)] if b else []),
-            ([e for e in b if not isinstance(e, ast.Starred)] if b else []),
+            func=self.dummy_name(),
+            args=a + ([e for e in b if isinstance(e, ast.Starred)] if b else []),
+            keywords=([e for e in b if isinstance(e, ast.keyword)] if b else []),
             LOCATIONS
         )
      }
     | a=kwargs {
         ast.Call(
-            "dummy",
-            [e for e in a if isinstance(e, ast.Starred)],
-            [e for e in a if not isinstance(e, ast.Starred)],
+            func=self.dummy_name(),
+            args=[e for e in a if isinstance(e, ast.Starred)],
+            keywords=[e for e in a if isinstance(e, ast.keyword)],
             LOCATIONS
         )
     }
@@ -1945,12 +1960,12 @@ invalid_arguments[NoReturn]:
     | a=args ',' '*' {
         self.raise_syntax_error_known_location(
             "iterable argument unpacking follows keyword argument unpacking",
-            a[1][-1] if a[1] else a[0][-1],
+            a.keywords[-1] if a.keywords else a.args[-1],
         )
      }
     | a=expression b=for_if_clauses ',' [args | expression for_if_clauses] {
         self.raise_syntax_error_known_range(
-            "Generator expression must be parenthesized", a, b[-1].target
+            "Generator expression must be parenthesized", a, self.get_last_target(b)
         )
      }
     | a=NAME b='=' expression for_if_clauses {
@@ -1961,20 +1976,20 @@ invalid_arguments[NoReturn]:
     | a=args for_if_clauses {
         self.raise_syntax_error_starting_from(
             "Generator expression must be parenthesized",
-            a[1][-1] if a[1] else a[0][-1]
+            a.keywords[-1] if a.keywords else a.args[-1]
         )
      }
     | args ',' a=expression b=for_if_clauses {
         self.raise_syntax_error_known_range(
             "Generator expression must be parenthesized",
             a,
-            b[-1].target,
+            self.get_last_target(b),
         )
      }
     | a=args ',' args {
         self.raise_syntax_error( # XXX looks wrong?
             "positional argument follows keyword argument unpacking"
-            if a[1][-1].arg is None else
+            if self.check_last_keyword_no_arg(a) else
             "positional argument follows keyword argument",
         )
      }
